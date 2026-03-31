@@ -1556,14 +1556,7 @@ The **Lean Spec** step is part of **BoP Execution**. It is where you fill Lean S
 - **How to edit**: Click the **info** icon → opens **Vendor List** screen → select vendors → **Save**.
 - **Generate**: On Lean Spec **Generate**, selected vendors are written into the Lean Spec Excel (`ProjectData_A`) in predefined rows.
 
-**Technical (data + Excel-focused)**  
-![](assets/execution-docu/leanspec/GD-tech.png)
 
-- Load source: `BOP.GeneralDetails`
-- Save target: `BOP_Execution.json` → `GeneralDetails`
-- Workbook: `TPE_Lean_Specification_R9_1.xlsm`
-- Sheet: `ProjectData_A`
-- Output: updated Lean Spec workbook.
 
 ---
 
@@ -1575,12 +1568,6 @@ The **Lean Spec** step is part of **BoP Execution**. It is where you fill Lean S
 - Save-only tab (no Generate).
 - Package/status checklist style UI.
 
-**Technical (data + output-focused)**  
-**[TODO: insert Required Docs technical image]**
-
-- Creates `.../BOPExecution/LeanSpecs/Required Docs/`
-- Copies PID folders (`PID301`, `PID303`, `PID310`, `PID314`) to output structure.
-
 ---
 
 #### `Technical Requirements and Recommendations (TRR_M)`
@@ -1591,14 +1578,6 @@ The **Lean Spec** step is part of **BoP Execution**. It is where you fill Lean S
 - **Revision banner**: set `Rev`, `Prepared`, `Checked`, `Approved`, and `Rev Date` for the TRR output.
 - **Project/Customer identity (read-only)**: shows `Project Name`, `EndCustomer Name`, `Customer Name`, and `Consultant Name`.
 - **Info icons (i)**: click to open **Order Indent (OI) → General Details** to change upstream values (these fields are locked here).
-
-**Technical (data + Excel/macro-focused)**  
-![](assets/execution-docu/leanspec/trr-tech.png)
-
-- Load: `BOP.LeanSpec.TRR_M`
-- Save: `BOP_Execution.json` → `LeanSpec.TRR_M`
-- Workbook: `TPE_Lean_Specification_R9_1.xlsm`
-- Sheet/Macro: `TRR_M` / `TRR`
 
 ---
 
@@ -1628,14 +1607,6 @@ The **Lean Spec** step is part of **BoP Execution**. It is where you fill Lean S
 
 - **Info icons (i)**: wherever a field is locked, the info icon tells you *exactly where in Scope of Supply* to change the upstream value.
 
-**Technical (data + Excel/macro-focused)**  
-![](assets/execution-docu/leanspec/customer-input-tech.png)
-
-- Load: `BOP.LeanSpec.CustomerInput`
-- Save: `BOP_Execution.json` → `LeanSpec.CustomerInput`
-- Workbook: `TPE_Lean_Specification_R9_1.xlsm`
-- Sheet/Macro: `Customer Input` / `CustomerInput`
-
 ---
 
 #### `DOR of TG Train` (DOR)
@@ -1653,14 +1624,6 @@ The **Lean Spec** step is part of **BoP Execution**. It is where you fill Lean S
 - **Turbine Exhaust (read-only)**
   - **Turbine Exhaust** is shown as **locked/read-only**.
   - Click the **info (i) icon** next to **Turbine Exhaust** to jump to **Scope of Supply (Mechanical) → Steam Turbine → Turbine Exhaust Type** to change it upstream.
-
-**Technical (data + Excel/macro-focused)**  
-![](assets/execution-docu/leanspec/DOR-tech.png)
-
-- Load: `BOP.LeanSpec.DOR`
-- Save: `BOP_Execution.json` → `LeanSpec.DOR`
-- Workbook: `TPE_Lean_Specification_R9_1.xlsm`
-- Sheet/Macro: `DOR_F` / `DOR`
 
 ---
 
@@ -1682,14 +1645,6 @@ The **Lean Spec** step is part of **BoP Execution**. It is where you fill Lean S
   - **Lube Oil Coolers**: Flow, Tube Side Design Pressure, Tube Side Pressure Drop.
   - **Alternator Oil Coolers**: Flow, Tube Side Design Pressure, Tube Side Pressure Drop.
   - **Gland Steam Condenser**: Flow, Tube Side Design Pressure, Tube Side Pressure Drop.
-
-**Technical (data + Excel/macro-focused)**  
-**[TODO: insert UTILITY-tech.png]**
-
-- Load: `BOP.LeanSpec.UtilityRequirments`
-- Save: `BOP_Execution.json` → `LeanSpec.UtilityRequirments`
-- Workbook: `TPE_Lean_Specification_R9_1.xlsm`
-- Sheet/Macro: `Utility Requirements` / `Print_Utility`
 
 ---
 
@@ -1757,17 +1712,6 @@ The **Lean Spec** step is part of **BoP Execution**. It is where you fill Lean S
 | 90 deg Bends (nos) | Manual | If Main Oil Pump = `No` → empty; else default `4` until user edits (then as-is) |
 | Wafer Check valve (nos) | Manual | If Main Oil Pump = `No` → empty; else default `1` until user edits (then as-is) |
 
-
-**Technical (data + Excel/macro-focused)**  
-![](assets/execution-docu/leanspec/gearbox-tech.png)
-
-- Load: `BOP.LeanSpec.GearboxCoupling`
-- Save: `BOP_Execution.json` → `LeanSpec.GearboxCoupling`
-- Workbook: `TPE_Lean_Specification_R9_1.xlsm`
-- Sheet/Macro:
-  - `Coupling_E_Type1` / `Print_Couplings`
-  - `Gearbox_G` / `GB`
-
 ---
 
 #### `Gland Steam Condenser` (PSGSC)
@@ -1820,13 +1764,7 @@ This tab has **2 parts**:
 - You get **cards per GSC line**; for each card set **Velocity band**, **V1**, and **Material**.  
 - Use **Show Full Table / Hide Full Table** to switch between summary vs detailed sizing/check table.
 
-**Technical (data + Excel/macro-focused)**  
-![](assets/execution-docu/leanspec/gsc-tech.png)
 
-- Load: `BOP.LeanSpec.PSGSC`
-- Save: `BOP_Execution.json` → `LeanSpec.PSGSC`
-- Workbook: `TPE_Lean_Specification_R9_1.xlsm`
-- Sheet/Macro: `GSC_C` / `GSC`
 
 ---
 
@@ -1835,14 +1773,7 @@ This tab has **2 parts**:
 **Functional (screen-focused)**  
 **[TODO: insert LOS-func.png]**
 
-**Technical (data + Excel/macro-focused)**  
-**[TODO: insert LOS-tech.png]**
 
-- Load: `BOP.LeanSpec.PSLOS`
-- Save: `BOP_Execution.json` → `LeanSpec.PSLOS`
-- Workbook: `Lube_Oil_BoP-Exec_v7.xlsm`
-- Sheet/Macro: `App_Input` / `GENERATE`
-- Conditional mapping logic differs for `PHE` vs `Shell&Tube`.
 
 ---
 
@@ -1912,18 +1843,6 @@ The app does **not** rely on a “Generate-only macro” to update sizing for th
 | Table values don’t change after **Calculate** | Excel calculation not recomputing (environment/add-in/workbook state) or output cells not being recalculated | Confirm you’re clicking the per-pipe **Calculate** button (not only changing inputs); re-open the tab and try again |
 | Values fill on open but never change | Inputs-only write succeeded, but Excel didn’t recompute the output cells on that machine | Have a user manually open the workbook and confirm `Line size_Output` recalculates; also check Excel calculation settings and add-in availability |
 | Only one pipe updates | Reading/writing mapping for pipe block is tied to the selected pipe card | Ensure you are pressing **Calculate** inside the specific pipe card you expect to update |
-
-
-**Technical (Excel + AutoCAD output-focused)**  
-![](assets/execution-docu/leanspec/hmbd-LS-tech.png)
-
-- Load: `BOP_Execution.json` → `LeanSpec.LineSize` (fallback to `linesize.json`)
-- Save: `BOP_Execution.json` → `LeanSpec.LineSize`
-- Workbook: `TPE_Lean_Specification_R9_1.xlsm`
-- Sheets: `Line size_Input`, `Line size_Output`
-- Generate output:
-  - DWG via AutoCAD automation
-  - PDF generated in background after DWG save
 
 ---
 
@@ -2079,13 +1998,6 @@ The **Electric** step is part of **BoP Execution**. It includes tab-wise electri
 | `Water leakage detector with relay (Local gauge) (Calculated)` | Derived from UPS voltage/frequency | Constructs the string: `Minimum 1 no per collecting tray` + newline + `C. UPS : 1-Ph, {UPS V}V AC, {UPS Hz}Hz (For Water Leakage Detector)`. |
 | `Excitation System (with / without PMG)` | SOS: `Generator PMG or without PMG` | Normalizes: contains `"With PMG"` → stores exactly `With PMG`; contains `"W/O"` → stores exactly `Without PMG`. |
 
-**Technical**  
-![](assets/execution-docu/electric/alternator-tech.png)
-
-- Load: `BOP.Electric.Alternator`
-- Save: `BOP_Execution.json` → `Electric.Alternator`
-- Workbook/Sheet/Macro: `PS_Alternator_v5_2.xlsm` / `Input Sheet` / `GENERATE`
-
 ---
 
 #### `AVR` (Automatic Voltage Regulator)
@@ -2193,14 +2105,6 @@ The **Electric** step is part of **BoP Execution**. It includes tab-wise electri
 | `PTR` (Drawings) | **Derived** from generator kV | Converts kV to volts and formats ratio text used in drawings. |
 | `PT Detail` (Drawings) | **SLD → Line-side PT text** | AVR parses section count (`SEC`), plus `CLASS` and `VA`, then formats drawing-ready PT detail text. |
 | `UPS VOLTAGE / DC VOLTAGE / AC Aux VOLTAGE` (Drawings) | **Derived** from the voltage/frequency values above | Builds strings like `230V AC, 50Hz` (or partial if one piece is missing). |
-
-
-**Technical**  
-![](assets/execution-docu/electric/avr-tech.png)
-
-- Load: `BOP.Electric.AVR`
-- Save: `BOP_Execution.json` → `Electric.AVR`
-- Workbook/Sheet/Macro: `AVR_Spec_Automation_Tool_v3.xlsm` / `Input Sheet` / `Button6_Click`
 
 ---
 
@@ -2328,13 +2232,6 @@ The **Electric** step is part of **BoP Execution**. It includes tab-wise electri
 |---|---|---|
 | `Packing` | **SOS → Design Basis → Packing** | Locked. Converted into a more “spec sentence” style (Domestic/Export/Customer contract wording). |
 
-**Technical**  
-![](assets/execution-docu/electric/LT-motor-tech.png)
-
-- Load: `BOP.Electric.LTMotor`
-- Save: `BOP_Execution.json` → `Electric.LTMotor`
-- Workbook/Sheet/Macro: `LT_Motor_Spec_v5_1.xlsm` / `Input Sheet` / `GENERATE`
-
 ---
 
 #### `SLD Calculators` (CT / PT / NGR / NGT)
@@ -2448,14 +2345,6 @@ The **Electric** step is part of **BoP Execution**. It includes tab-wise electri
 
 - The dedicated **field-mapping file** for calculators is commented out in source; runtime behavior is driven by **`SLDExecutionCalculatorsViewModel`**, **`SLDExecutionCalculatorsModel`**, and **`ConfigReader`** / **`LoadDefaultsAsync`** paths shared with SLD Execution.
 
-**Technical**  
-![](assets/execution-docu/electric/sld-calculator-tech.png)
-
-- Intermediate save: `.../Auxiliaries/AuxilaryInputs/SLDCalculators.json`
-- Outputs generated from calculator templates using Excel macros:
-  - `CT_PT_CALCULATIONS.xlsm` (`PRINT_PDF`)
-  - `NGR_CALCULATION.xlsm` (`Print_PDF`) when applicable
-  - `NGT_CALCULATION.xlsm` (`Button2_Click`) when applicable
 
 ---
 
@@ -2559,13 +2448,6 @@ The **Electric** step is part of **BoP Execution**. It includes tab-wise electri
 
 - In `SLDExecution.xaml`, **`Save`** is bound to **`InterSaveCommand`** and **`Generate`** to **`SaveCommand`** (`SaveSLD` → `GenerateSLD`). The naming is inverted vs typical `Save`/`Generate` wiring; document this for end users to avoid confusion.
 
-**Technical**  
-![](assets/execution-docu/electric/sld-execution-tech.png)
-
-- Intermediate save: `Auxiliaries/AuxilaryInputs/Sld.json`
-- Generate via AutoCAD automation with layer visibility logic
-- Output: SLD DWG + PDF in SLD destination folder
-
 ---
 
 #### `Control Panel Layout` (CPL)
@@ -2645,13 +2527,6 @@ The **Electric** step is part of **BoP Execution**. It includes tab-wise electri
 ### 6) Technical note
 
 - UI section title is spelled **“Varient Selection”** in XAML; the concept is **variant** selection for layout width/configuration.
-
-**Technical**  
-![](assets/execution-docu/electric/cpl-tech.png)
-
-- Load: `BOP.Electric.ControlPanelLayout`
-- Save: `BOP_Execution.json` → `Electric.ControlPanelLayout`
-- Workbook/Sheet/Macro: `Control Panel Layout v2.xlsm` / `CPL` / `Run_all_CPL`
 
 ---
 
@@ -2742,12 +2617,7 @@ The **Electric** step is part of **BoP Execution**. It includes tab-wise electri
 
 - `LoadDataAsync` shows a generic error alert text referencing **Control Panel Layout** — that message is misleading if LPBS load fails; the code path is LPBS.
 
-**Technical**  
-![](assets/execution-docu/electric/lpbs-tech.png)
 
-- Load: `BOP.Electric.LPBS`
-- Save: `BOP_Execution.json` → `Electric.LPBS`
-- Workbook/Sheet/Macro: `Local Push Button System v1.xlsm` / `LPBS` / `Run_all_LPBS`
 
 ---
 
@@ -2842,14 +2712,6 @@ From **`PowerCableFieldMapping`**, the following are loaded from **OI** when mer
 Everything else (scope pickers, DB rows, motors, battery) lives in the **Power Cable** section of `BOP_Execution.json` once saved.
 
 
-**Technical**  
-![](assets/execution-docu/electric/power-cable-tech.png)
-
-- Load: `BOP.Electric.PowerCable`
-- Save: `BOP_Execution.json` → `Electric.PowerCable`
-- Workbook/Sheet/Macro: `POWER CABLE SCHEDULE_23-01-2026.xlsm` / `Ip Sheet` / `GENERATE`
-- Uses resolver services (e.g., cable run + barring gear mappings).
-
 ---
 
 #### `Control cable`
@@ -2857,12 +2719,7 @@ Everything else (scope pickers, DB rows, motors, battery) lives in the **Power C
 **Functional**  
 **[TODO: insert ControlCable-func.png]**
 
-**Technical**  
-**[TODO: insert ControlCable-tech.png]**
 
-- Load: `BOP.Electric.ControlCable`
-- Save: `BOP_Execution.json` → `Electric.ControlCable`
-- Current code caveat: `MainExcelFileName` and `SheetMacroPairs` are empty in `ControlCableViewModel` (template/macro wiring should be finalized).
 
 ---
 
@@ -2990,19 +2847,6 @@ Paths below are under the app’s **project JSON root** (`JsonPathManager` / `Bo
 | Lube Oil Cooler CW Inlet and Outlet Line Size | This tab / saved | Editable. |
 | Alternator Cooler CW Inlet and Outlet Line Size | This tab / saved | Editable. |
 
-
-**Technical (data + Excel/macro-focused)**  
-![](assets/execution-docu/mech/valve-tech.png)
-
-- Load: `BOP.Mecha.ValveScheduleModel`
-- Save: `BOP_Execution.json` → `Mecha.ValveScheduleModel`
-- Workbook: `Automation_Tool_Valve_schedule.xlsm`
-- Sheet: `Input Datasheet`
-- Macros:
-  - `UpdateandExtractValues.UpdateandExtractValues`
-  - `RefreshAndProcessData`
-- Output folder: `.../BOPExecution/Mechanical/ValveSchedule/`
-
 ---
 
 #### `Specialty Schedule` (SpecialtySchedule)
@@ -3105,21 +2949,6 @@ Grid columns: **Component ID**, **Body Material**, **Medium**, **Scope**, **Size
 | ADJUSTABLE ORIFICE | This tab / saved rows | **AOR501–505** sizes from flow bands: ≤35 → **15NB**, ≤220 → **25NB**, ≤900 → **50NB**, else **80NB**, using lpm from turbine front sum, rear, gearbox, alternator front/rear. |
 | SIGHT FLOW GLASS | This tab / saved rows | **SG501** from numeric part of **FE506** size; **SG502** from **FE507**; **SG503** from **Gearbox Header Size** (≤100 → **50NB**, else **80NB**). |
 | FIXED ORIFICE | This tab / saved rows | **OR151/152** use live-stream pressure; **OR153** HP wheel; **OR156** casing drain; **OR154** max AK1 pressure. If `pressure × 1.01325 ≤ 2` → valve class **7 mm Dia**, else **10 mm Dia**. **Add** creates new **OR{number}** using live-stream pressure for initial class. Default **OR*** rows cannot be deleted in code. |
-
----
-**Technical (data + Excel/macro-focused)**  
-![](assets/execution-docu/mech/specialtyschedule-tech.png)
-
-- Load: `BOP.Mecha.SpecialtyScheduleModel`
-- Save: `BOP_Execution.json` → `Mecha.SpecialtyScheduleModel`
-- Workbook: `Automation_tool_Specialty_Schedule_v2.xlsm`
-- Sheet: `Input Datasheet`
-- Macro: `Button11_Click`
-- Dynamic table export logic:
-  - starts at row `46`
-  - skips rows `47, 52, 58, 62`
-  - maps item columns to sheet columns (`C` body material, `D` medium, `E` scope, `F` size)
-- Output folder: `.../BOPExecution/Mechanical/SpecialtySchedule/`
 
 ---
 
