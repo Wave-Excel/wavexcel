@@ -1758,8 +1758,62 @@ This tab has **2 parts**:
 | Steam/Air inlet temperature (Normal) | `wlaby.JSON` | (MaxLoadMassFlow1 × MaxLoadTemperature1 + MaxLoadMassFlow2 × MaxLoadTemperature2) / (MaxLoadMassFlow1 + MaxLoadMassFlow2) |
 | Steam/Air inlet temperature (Maximum) | `wlaby.JSON` | (NoLoadMassFlow1 × NoLoadTemperature1 + NoLoadMassFlow2 × NoLoadTemperature2) / (NoLoadMassFlow1 + NoLoadMassFlow2) |
 | Design temperature | `wlaby.JSON` | Steam/Air inlet temperature (Maximum) + 10 |
+ 
 
-2) **GSC Line Sizing (below)**  
+# GSC line sizing — operating P, T, mass flow from WLABY
+
+## What this is
+
+How **Front leak off**, **Rear leak off**, and **Combined header** get **operating pressure, temperature, and mass flow** for GSC line sizing from **WLABY JSON**.
+
+**Not covered here:** air/steam inlet flows, Excel line-size workbook, NB/schedule calculation, PID output.
+
+## WLABY keys used
+
+![](assets/execution-docu/leanspec/gsc-line-size-wlaby-screen.png)
+
+| Key |
+|-----|
+| `MaxLoadTemperature1`, `NoLoadTemperature1` |
+| `MaxLoadTemperature2`, `NoLoadTemperature2` |
+| `MaxLoadMassFlow1`, `NoLoadMassFlow1` |
+| `MaxLoadMassFlow2`, `NoLoadMassFlow2` |
+
+Missing or non-numeric values → treat as **0**.
+
+![](assets/execution-docu/leanspec/gsc-front-WMF-and-json-sidebyside.png)
+
+## Formulas
+
+| Pipe | Field | Formula |
+|------|--------|---------|
+| Front leak off | Operating pressure | **0.97** (fixed) |
+| Front leak off | Operating temperature | `max(MaxLoadTemperature1, NoLoadTemperature1)` |
+| Front leak off | Operating mass flow | `max(MaxLoadMassFlow1, NoLoadMassFlow1)` |
+| Rear leak off | Operating pressure | **0.97** (fixed) |
+| Rear leak off | Operating temperature | `max(MaxLoadTemperature2, NoLoadTemperature2)` |
+| Rear leak off | Operating mass flow | `max(MaxLoadMassFlow2, NoLoadMassFlow2)` |
+| Combined header | Operating pressure | **0.97** (fixed) |
+| Combined header | Operating temperature | `max(A, ceil(B))` where **A** = `(MaxLoadMassFlow1*MaxLoadTemperature1 + MaxLoadMassFlow2*MaxLoadTemperature2)/(MaxLoadMassFlow1+MaxLoadMassFlow2)` if sum of max-load mass flows &gt; 0 else **0**; **B** = `(NoLoadMassFlow1*NoLoadTemperature1 + NoLoadMassFlow2*NoLoadTemperature2)/(NoLoadMassFlow1+NoLoadMassFlow2)` if sum of no-load mass flows &gt; 0 else **0** |
+| Combined header | Operating mass flow | `1.5 * max(front operating mass flow, rear operating mass flow)` |
+
+## Example result
+
+![](assets/execution-docu/leanspec/gsc-line-size-wlaby-screen.png)
+
+- **Front leak off — operating pressure:** 0.97  
+- **Front leak off — operating temperature:** 348  
+- **Front leak off — operating mass flow:** 0.014  
+- **Rear leak off — operating pressure:** 0.97  
+- **Rear leak off — operating temperature:** 319  
+- **Rear leak off — operating mass flow:** 0.016  
+- **Combined header — operating pressure:** 0.97  
+- **Combined header — operating temperature:** 329  
+- **Combined header — operating mass flow:** 0.024  
+
+
+## After Wlaby calculation :
+
 - Click **Calculate**.  
 - You get **cards per GSC line**; for each card set **Velocity band**, **V1**, and **Material**.  
 - Use **Show Full Table / Hide Full Table** to switch between summary vs detailed sizing/check table.
@@ -2743,7 +2797,7 @@ The **MECH** step is part of **BoP Execution**. It includes mechanical schedule 
 #### `Valve Schedule` (ValveSchedule)
 
 **Functional (screen-focused)**  
-<!-- ![](assets/execution-docu/mech/valve-schedule-func.png) -->
+![](assets/execution-docu/mech/valve-func.png)
 
 Mechanical tab that fills the **valve schedule Excel tool** from OI, thermo workbook cells, WLABY JSON, Scope of Supply, PID 301/310, and what you save on this screen. **Save** updates `BOP_Execution.json` (mechanical valve schedule). **Generate** writes `Automation_Tool_Valve_schedule.xlsm` (sheet **Input Datasheet**) and runs its macros.
 
@@ -2852,7 +2906,7 @@ Paths below are under the app’s **project JSON root** (`JsonPathManager` / `Bo
 #### `Specialty Schedule` (SpecialtySchedule)
 
 **Functional (screen-focused)**  
-<!-- ![](assets/execution-docu/mech/specialty-schedule-func.png) -->
+![](assets/execution-docu/mech/specialtyschedule-func.png)
 
 Mechanical tab for the **specialty schedule** Excel tool: project header, power/lube/alternator/gearbox data, thermo operating pressures/temperatures, casing-drain inputs, and **PID 310–style specialty rows** (filters, flex elements, orifices, sight glasses, fixed orifices). **Save** updates `BOP_Execution.json` (mechanical specialty schedule). **Generate** fills `Automation_tool_Specialty_Schedule_v2.xlsm` (sheet **Input Datasheet**) and runs macro **Button11_Click**. Specialty rows are also written to the workbook from a **dynamic row map** in code (starting around Excel row 46, with fixed gaps).
 
