@@ -1,0 +1,848 @@
+Function getGeneratorEfficiency(ByVal eff As Double)
+
+Call ex_HMBD_GeneratorEfficiency.CalcGeneratorEfficiency(FindClosestNumber(), eff)
+
+End Function
+
+Function FindClosestNumber() As Integer
+
+    Dim ws As Worksheet
+
+    Dim rng As Range
+
+    Dim cell As Range
+
+    Dim targetValue As Double
+
+    Dim closestValue As Double
+
+    Dim minDifference As Double
+
+    Dim difference As Double
+
+ 
+
+    ' Set the worksheet and range containing the options
+
+    Set ws = ThisWorkbook.Sheets("OPEN_HBD") ' Change "Customer_Inputs" to your sheet name
+
+    Set rng = ws.Range("AI30:AI45") ' Change this to the range containing your options
+
+ 
+
+' ex_Customer_Input_Handler.Get the target value from cell K11
+
+    targetValue = ws.Range("K11").value
+
+ 
+
+    ' Initialize the closest value and minimum difference
+
+    closestValue = rng.Cells(1, 1).value
+
+    minDifference = Abs(targetValue - closestValue)
+
+ 
+
+    ' Loop through each cell in the range
+
+    For Each cell In rng
+
+        difference = Abs(targetValue - cell.value)
+
+        If difference < minDifference Then
+
+            minDifference = difference
+
+            closestValue = cell.value
+
+        End If
+
+    Next cell
+
+ 
+
+    ' Output the closest value
+
+    ws.Range("L11").value = closestValue ' Change "L11" to the cell where you want to output the closest value
+
+    FindClosestNumber = closestValue
+
+
+
+End Function
+
+Function CalcGeneratorEfficiency(ByRef power As Integer, ByVal Efficiency As Double)
+
+    Dim ws As Worksheet
+
+    Dim outputCell As Double
+
+    Set ws = ThisWorkbook.Sheets("OPEN_HBD")
+
+   
+
+    inputCell = Efficiency
+    Select Case power
+
+   
+
+    Case 1000
+
+    outputCell = LagrangeInterpolation1000(inputCell) / 100
+
+    Case 1500
+
+    outputCell = LagrangeInterpolation1500(inputCell) / 100
+
+    Case 2000
+
+    outputCell = LagrangeInterpolation2000(inputCell) / 100
+
+    Case 2500
+
+    outputCell = LagrangeInterpolation2500(inputCell) / 100
+
+    Case 3000
+
+    outputCell = LagrangeInterpolation3000(inputCell) / 100
+
+    Case 3400
+
+    outputCell = LagrangeInterpolation3400(inputCell) / 100
+
+    Case 4000
+
+    outputCell = LagrangeInterpolation4000(inputCell) / 100
+
+    Case 4500
+
+    outputCell = LagrangeInterpolation4500(inputCell) / 100
+
+    Case 5000
+
+    outputCell = LagrangeInterpolation5000(inputCell) / 100
+
+    Case 6000
+
+    outputCell = LagrangeInterpolation6000(inputCell) / 100
+
+    Case 7000
+
+    outputCell = LagrangeInterpolation7000(inputCell) / 100
+
+    Case 7500
+
+    outputCell = LagrangeInterpolation7500(inputCell) / 100
+
+    Case 8000
+
+    outputCell = LagrangeInterpolation8000(inputCell) / 100
+
+    Case 8650
+
+    outputCell = LagrangeInterpolation8650(inputCell) / 100
+
+    Case 9000
+
+    outputCell = LagrangeInterpolation9000(inputCell) / 100
+
+    Case 10000
+
+    outputCell = LagrangeInterpolation10000(inputCell) / 100
+
+    End Select
+
+    ws.Range("O10") = outputCell
+ex_HELPER_FUNC.Logger "Generator Efficiency is:" & outputCell * 100 & "%"
+
+End Function
+
+ 
+
+ 
+
+Function LagrangeInterpolation1000(ByVal x As Double) As Double
+
+    Dim x0 As Double, x1 As Double, x2 As Double, x3 As Double
+
+    Dim y0 As Double, y1 As Double, y2 As Double, y3 As Double
+
+    Dim L0 As Double, L1 As Double, L2 As Double, L3 As Double
+
+ 
+
+    ' Given data points
+
+    x0 = 25: y0 = 90.23
+
+    x1 = 50: y1 = 93.1
+
+    x2 = 75: y2 = 93.22
+
+    x3 = 100: y3 = 94.2
+
+ 
+
+' Calculate ex_HMBD_GeneratorEfficiency.Lagrange basis polynomials
+
+    L0 = ((x - x1) * (x - x2) * (x - x3)) / ((x0 - x1) * (x0 - x2) * (x0 - x3))
+
+    L1 = ((x - x0) * (x - x2) * (x - x3)) / ((x1 - x0) * (x1 - x2) * (x1 - x3))
+
+    L2 = ((x - x0) * (x - x1) * (x - x3)) / ((x2 - x0) * (x2 - x1) * (x2 - x3))
+
+    L3 = ((x - x0) * (x - x1) * (x - x2)) / ((x3 - x0) * (x3 - x1) * (x3 - x2))
+
+ 
+
+    ' Calculate the interpolation polynomial
+
+LagrangeInterpolation1000 = y0 * L0 + y1 * L1 + y2 * L2 + y3 * L3
+
+End Function
+
+ 
+
+Function LagrangeInterpolation1500(ByVal x As Double) As Double
+
+    Dim x0 As Double, x1 As Double, x2 As Double, x3 As Double
+
+    Dim y0 As Double, y1 As Double, y2 As Double, y3 As Double
+
+    Dim L0 As Double, L1 As Double, L2 As Double, L3 As Double
+
+   
+
+    ' Given data points
+
+    x0 = 25: y0 = 92.3
+
+    x1 = 50: y1 = 93.33
+
+    x2 = 75: y2 = 93.45
+
+    x3 = 100: y3 = 94.3
+
+   
+
+' Calculate ex_HMBD_GeneratorEfficiency.Lagrange basis polynomials
+
+    L0 = ((x - x1) * (x - x2) * (x - x3)) / ((x0 - x1) * (x0 - x2) * (x0 - x3))
+
+    L1 = ((x - x0) * (x - x2) * (x - x3)) / ((x1 - x0) * (x1 - x2) * (x1 - x3))
+
+    L2 = ((x - x0) * (x - x1) * (x - x3)) / ((x2 - x0) * (x2 - x1) * (x2 - x3))
+
+    L3 = ((x - x0) * (x - x1) * (x - x2)) / ((x3 - x0) * (x3 - x1) * (x3 - x2))
+
+   
+
+    ' Calculate the interpolation polynomial
+
+LagrangeInterpolation1500 = y0 * L0 + y1 * L1 + y2 * L2 + y3 * L3
+
+End Function
+
+ 
+
+ 
+
+Function LagrangeInterpolation2000(ByVal x As Double) As Double
+
+    Dim x0 As Double, x1 As Double, x2 As Double, x3 As Double
+
+    Dim y0 As Double, y1 As Double, y2 As Double, y3 As Double
+
+    Dim L0 As Double, L1 As Double, L2 As Double, L3 As Double
+
+   
+
+    ' Given data points
+
+    x0 = 25: y0 = 92.1
+
+    x1 = 50: y1 = 93.91
+
+    x2 = 75: y2 = 94.02
+
+    x3 = 100: y3 = 94.9
+
+   
+
+' Calculate ex_HMBD_GeneratorEfficiency.Lagrange basis polynomials
+
+    L0 = ((x - x1) * (x - x2) * (x - x3)) / ((x0 - x1) * (x0 - x2) * (x0 - x3))
+
+    L1 = ((x - x0) * (x - x2) * (x - x3)) / ((x1 - x0) * (x1 - x2) * (x1 - x3))
+
+    L2 = ((x - x0) * (x - x1) * (x - x3)) / ((x2 - x0) * (x2 - x1) * (x2 - x3))
+
+    L3 = ((x - x0) * (x - x1) * (x - x2)) / ((x3 - x0) * (x3 - x1) * (x3 - x2))
+
+   
+
+    ' Calculate the interpolation polynomial
+
+LagrangeInterpolation2000 = y0 * L0 + y1 * L1 + y2 * L2 + y3 * L3
+
+End Function
+
+ 
+
+ 
+
+Function LagrangeInterpolation2500(ByVal x As Double) As Double
+
+    Dim x0 As Double, x1 As Double, x2 As Double, x3 As Double
+
+    Dim y0 As Double, y1 As Double, y2 As Double, y3 As Double
+
+    Dim L0 As Double, L1 As Double, L2 As Double, L3 As Double
+
+   
+
+    ' Given data points
+
+    x0 = 25: y0 = 91.72
+
+    x1 = 50: y1 = 94.14
+
+    x2 = 75: y2 = 94.3
+
+    x3 = 100: y3 = 95
+
+   
+
+' Calculate ex_HMBD_GeneratorEfficiency.Lagrange basis polynomials
+
+    L0 = ((x - x1) * (x - x2) * (x - x3)) / ((x0 - x1) * (x0 - x2) * (x0 - x3))
+
+    L1 = ((x - x0) * (x - x2) * (x - x3)) / ((x1 - x0) * (x1 - x2) * (x1 - x3))
+
+    L2 = ((x - x0) * (x - x1) * (x - x3)) / ((x2 - x0) * (x2 - x1) * (x2 - x3))
+
+    L3 = ((x - x0) * (x - x1) * (x - x2)) / ((x3 - x0) * (x3 - x1) * (x3 - x2))
+
+   
+
+    ' Calculate the interpolation polynomial
+
+LagrangeInterpolation2500 = y0 * L0 + y1 * L1 + y2 * L2 + y3 * L3
+
+End Function
+
+ 
+
+ 
+
+Function LagrangeInterpolation3000(ByVal x As Double) As Double
+
+    Dim x0 As Double, x1 As Double, x2 As Double, x3 As Double
+
+    Dim y0 As Double, y1 As Double, y2 As Double, y3 As Double
+
+    Dim L0 As Double, L1 As Double, L2 As Double, L3 As Double
+
+   
+
+    ' Given data points
+
+    x0 = 25: y0 = 92.3
+
+    x1 = 50: y1 = 94.5
+
+    x2 = 75: y2 = 94.6
+
+    x3 = 100: y3 = 95.3
+
+   
+
+' Calculate ex_HMBD_GeneratorEfficiency.Lagrange basis polynomials
+
+    L0 = ((x - x1) * (x - x2) * (x - x3)) / ((x0 - x1) * (x0 - x2) * (x0 - x3))
+
+    L1 = ((x - x0) * (x - x2) * (x - x3)) / ((x1 - x0) * (x1 - x2) * (x1 - x3))
+
+    L2 = ((x - x0) * (x - x1) * (x - x3)) / ((x2 - x0) * (x2 - x1) * (x2 - x3))
+
+    L3 = ((x - x0) * (x - x1) * (x - x2)) / ((x3 - x0) * (x3 - x1) * (x3 - x2))
+
+   
+
+    ' Calculate the interpolation polynomial
+
+LagrangeInterpolation3000 = y0 * L0 + y1 * L1 + y2 * L2 + y3 * L3
+
+End Function
+
+ 
+
+Function LagrangeInterpolation3400(ByVal x As Double) As Double
+
+    Dim x0 As Double, x1 As Double, x2 As Double, x3 As Double
+
+    Dim y0 As Double, y1 As Double, y2 As Double, y3 As Double
+
+    Dim L0 As Double, L1 As Double, L2 As Double, L3 As Double
+
+   
+
+    ' Given data points
+
+    x0 = 25: y0 = 93
+
+    x1 = 50: y1 = 95.1
+
+    x2 = 75: y2 = 95.2
+
+    x3 = 100: y3 = 95.8
+
+   
+
+' Calculate ex_HMBD_GeneratorEfficiency.Lagrange basis polynomials
+
+    L0 = ((x - x1) * (x - x2) * (x - x3)) / ((x0 - x1) * (x0 - x2) * (x0 - x3))
+
+    L1 = ((x - x0) * (x - x2) * (x - x3)) / ((x1 - x0) * (x1 - x2) * (x1 - x3))
+
+    L2 = ((x - x0) * (x - x1) * (x - x3)) / ((x2 - x0) * (x2 - x1) * (x2 - x3))
+
+    L3 = ((x - x0) * (x - x1) * (x - x2)) / ((x3 - x0) * (x3 - x1) * (x3 - x2))
+
+   
+
+    ' Calculate the interpolation polynomial
+
+LagrangeInterpolation3400 = y0 * L0 + y1 * L1 + y2 * L2 + y3 * L3
+
+End Function
+
+ 
+
+Function LagrangeInterpolation4000(ByVal x As Double) As Double
+
+    Dim x0 As Double, x1 As Double, x2 As Double, x3 As Double
+
+    Dim y0 As Double, y1 As Double, y2 As Double, y3 As Double
+
+    Dim L0 As Double, L1 As Double, L2 As Double, L3 As Double
+
+   
+
+    ' Given data points
+
+    x0 = 25: y0 = 93.1
+
+    x1 = 50: y1 = 95.6
+
+    x2 = 75: y2 = 96
+
+    x3 = 100: y3 = 96.1
+
+   
+
+' Calculate ex_HMBD_GeneratorEfficiency.Lagrange basis polynomials
+
+    L0 = ((x - x1) * (x - x2) * (x - x3)) / ((x0 - x1) * (x0 - x2) * (x0 - x3))
+
+    L1 = ((x - x0) * (x - x2) * (x - x3)) / ((x1 - x0) * (x1 - x2) * (x1 - x3))
+
+    L2 = ((x - x0) * (x - x1) * (x - x3)) / ((x2 - x0) * (x2 - x1) * (x2 - x3))
+
+    L3 = ((x - x0) * (x - x1) * (x - x2)) / ((x3 - x0) * (x3 - x1) * (x3 - x2))
+
+   
+
+    ' Calculate the interpolation polynomial
+
+LagrangeInterpolation4000 = y0 * L0 + y1 * L1 + y2 * L2 + y3 * L3
+
+End Function
+
+ 
+
+Function LagrangeInterpolation4500(ByVal x As Double) As Double
+
+    Dim x0 As Double, x1 As Double, x2 As Double, x3 As Double
+
+    Dim y0 As Double, y1 As Double, y2 As Double, y3 As Double
+
+    Dim L0 As Double, L1 As Double, L2 As Double, L3 As Double
+
+   
+
+    ' Given data points
+
+    x0 = 25: y0 = 93.7
+
+    x1 = 50: y1 = 96.1
+
+    x2 = 75: y2 = 96.3
+
+    x3 = 100: y3 = 96.4
+
+   
+
+' Calculate ex_HMBD_GeneratorEfficiency.Lagrange basis polynomials
+
+    L0 = ((x - x1) * (x - x2) * (x - x3)) / ((x0 - x1) * (x0 - x2) * (x0 - x3))
+
+    L1 = ((x - x0) * (x - x2) * (x - x3)) / ((x1 - x0) * (x1 - x2) * (x1 - x3))
+
+    L2 = ((x - x0) * (x - x1) * (x - x3)) / ((x2 - x0) * (x2 - x1) * (x2 - x3))
+
+    L3 = ((x - x0) * (x - x1) * (x - x2)) / ((x3 - x0) * (x3 - x1) * (x3 - x2))
+
+   
+
+    ' Calculate the interpolation polynomial
+
+LagrangeInterpolation4500 = y0 * L0 + y1 * L1 + y2 * L2 + y3 * L3
+
+End Function
+
+ 
+
+Function LagrangeInterpolation5000(ByVal x As Double) As Double
+
+    Dim x0 As Double, x1 As Double, x2 As Double, x3 As Double
+
+    Dim y0 As Double, y1 As Double, y2 As Double, y3 As Double
+
+    Dim L0 As Double, L1 As Double, L2 As Double, L3 As Double
+
+   
+
+    ' Given data points
+
+    x0 = 25: y0 = 93.7
+
+    x1 = 50: y1 = 96.1
+
+    x2 = 75: y2 = 96.4
+
+    x3 = 100: y3 = 96.5
+
+   
+
+' Calculate ex_HMBD_GeneratorEfficiency.Lagrange basis polynomials
+
+    L0 = ((x - x1) * (x - x2) * (x - x3)) / ((x0 - x1) * (x0 - x2) * (x0 - x3))
+
+    L1 = ((x - x0) * (x - x2) * (x - x3)) / ((x1 - x0) * (x1 - x2) * (x1 - x3))
+
+    L2 = ((x - x0) * (x - x1) * (x - x3)) / ((x2 - x0) * (x2 - x1) * (x2 - x3))
+
+    L3 = ((x - x0) * (x - x1) * (x - x2)) / ((x3 - x0) * (x3 - x1) * (x3 - x2))
+
+   
+
+    ' Calculate the interpolation polynomial
+
+LagrangeInterpolation5000 = y0 * L0 + y1 * L1 + y2 * L2 + y3 * L3
+
+End Function
+
+ 
+
+ 
+
+Function LagrangeInterpolation6000(ByVal x As Double) As Double
+
+    Dim x0 As Double, x1 As Double, x2 As Double, x3 As Double
+
+    Dim y0 As Double, y1 As Double, y2 As Double, y3 As Double
+
+    Dim L0 As Double, L1 As Double, L2 As Double, L3 As Double
+
+   
+
+    ' Given data points
+
+    x0 = 25: y0 = 93.5
+
+    x1 = 50: y1 = 96
+
+    x2 = 75: y2 = 96.5
+
+    x3 = 100: y3 = 96.7
+
+   
+
+' Calculate ex_HMBD_GeneratorEfficiency.Lagrange basis polynomials
+
+    L0 = ((x - x1) * (x - x2) * (x - x3)) / ((x0 - x1) * (x0 - x2) * (x0 - x3))
+
+    L1 = ((x - x0) * (x - x2) * (x - x3)) / ((x1 - x0) * (x1 - x2) * (x1 - x3))
+
+    L2 = ((x - x0) * (x - x1) * (x - x3)) / ((x2 - x0) * (x2 - x1) * (x2 - x3))
+
+    L3 = ((x - x0) * (x - x1) * (x - x2)) / ((x3 - x0) * (x3 - x1) * (x3 - x2))
+
+   
+
+    ' Calculate the interpolation polynomial
+
+LagrangeInterpolation6000 = y0 * L0 + y1 * L1 + y2 * L2 + y3 * L3
+
+End Function
+
+ 
+
+Function LagrangeInterpolation7000(ByVal x As Double) As Double
+
+    Dim x0 As Double, x1 As Double, x2 As Double, x3 As Double
+
+    Dim y0 As Double, y1 As Double, y2 As Double, y3 As Double
+
+    Dim L0 As Double, L1 As Double, L2 As Double, L3 As Double
+
+   
+
+    ' Given data points
+
+    x0 = 25: y0 = 94.2
+
+    x1 = 50: y1 = 96.4
+
+    x2 = 75: y2 = 96.9
+
+    x3 = 100: y3 = 97
+
+   
+
+' Calculate ex_HMBD_GeneratorEfficiency.Lagrange basis polynomials
+
+    L0 = ((x - x1) * (x - x2) * (x - x3)) / ((x0 - x1) * (x0 - x2) * (x0 - x3))
+
+    L1 = ((x - x0) * (x - x2) * (x - x3)) / ((x1 - x0) * (x1 - x2) * (x1 - x3))
+
+    L2 = ((x - x0) * (x - x1) * (x - x3)) / ((x2 - x0) * (x2 - x1) * (x2 - x3))
+
+    L3 = ((x - x0) * (x - x1) * (x - x2)) / ((x3 - x0) * (x3 - x1) * (x3 - x2))
+
+   
+
+    ' Calculate the interpolation polynomial
+
+LagrangeInterpolation7000 = y0 * L0 + y1 * L1 + y2 * L2 + y3 * L3
+
+End Function
+
+ 
+
+ 
+
+Function LagrangeInterpolation7500(ByVal x As Double) As Double
+
+    Dim x0 As Double, x1 As Double, x2 As Double, x3 As Double
+
+    Dim y0 As Double, y1 As Double, y2 As Double, y3 As Double
+
+    Dim L0 As Double, L1 As Double, L2 As Double, L3 As Double
+
+   
+
+    ' Given data points
+
+    x0 = 25: y0 = 93.8
+
+    x1 = 50: y1 = 96.4
+
+    x2 = 75: y2 = 97
+
+    x3 = 100: y3 = 97.3
+
+   
+
+' Calculate ex_HMBD_GeneratorEfficiency.Lagrange basis polynomials
+
+    L0 = ((x - x1) * (x - x2) * (x - x3)) / ((x0 - x1) * (x0 - x2) * (x0 - x3))
+
+    L1 = ((x - x0) * (x - x2) * (x - x3)) / ((x1 - x0) * (x1 - x2) * (x1 - x3))
+
+    L2 = ((x - x0) * (x - x1) * (x - x3)) / ((x2 - x0) * (x2 - x1) * (x2 - x3))
+
+    L3 = ((x - x0) * (x - x1) * (x - x2)) / ((x3 - x0) * (x3 - x1) * (x3 - x2))
+
+   
+
+    ' Calculate the interpolation polynomial
+
+LagrangeInterpolation7500 = y0 * L0 + y1 * L1 + y2 * L2 + y3 * L3
+
+End Function
+
+ 
+
+ 
+
+Function LagrangeInterpolation8000(ByVal x As Double) As Double
+
+    Dim x0 As Double, x1 As Double, x2 As Double, x3 As Double
+
+    Dim y0 As Double, y1 As Double, y2 As Double, y3 As Double
+
+    Dim L0 As Double, L1 As Double, L2 As Double, L3 As Double
+
+   
+
+    ' Given data points
+
+    x0 = 25: y0 = 93.8
+
+    x1 = 50: y1 = 96.4
+
+    x2 = 75: y2 = 97
+
+    x3 = 100: y3 = 97.3
+
+   
+
+' Calculate ex_HMBD_GeneratorEfficiency.Lagrange basis polynomials
+
+    L0 = ((x - x1) * (x - x2) * (x - x3)) / ((x0 - x1) * (x0 - x2) * (x0 - x3))
+
+    L1 = ((x - x0) * (x - x2) * (x - x3)) / ((x1 - x0) * (x1 - x2) * (x1 - x3))
+
+    L2 = ((x - x0) * (x - x1) * (x - x3)) / ((x2 - x0) * (x2 - x1) * (x2 - x3))
+
+    L3 = ((x - x0) * (x - x1) * (x - x2)) / ((x3 - x0) * (x3 - x1) * (x3 - x2))
+
+   
+
+    ' Calculate the interpolation polynomial
+
+LagrangeInterpolation8000 = y0 * L0 + y1 * L1 + y2 * L2 + y3 * L3
+
+End Function
+
+ 
+
+Function LagrangeInterpolation8650(ByVal x As Double) As Double
+
+    Dim x0 As Double, x1 As Double, x2 As Double, x3 As Double
+
+    Dim y0 As Double, y1 As Double, y2 As Double, y3 As Double
+
+    Dim L0 As Double, L1 As Double, L2 As Double, L3 As Double
+
+   
+
+    ' Given data points
+
+    x0 = 25: y0 = 94.5
+
+    x1 = 50: y1 = 96.7
+
+    x2 = 75: y2 = 97.2
+
+    x3 = 100: y3 = 97.3
+
+   
+
+' Calculate ex_HMBD_GeneratorEfficiency.Lagrange basis polynomials
+
+    L0 = ((x - x1) * (x - x2) * (x - x3)) / ((x0 - x1) * (x0 - x2) * (x0 - x3))
+
+    L1 = ((x - x0) * (x - x2) * (x - x3)) / ((x1 - x0) * (x1 - x2) * (x1 - x3))
+
+    L2 = ((x - x0) * (x - x1) * (x - x3)) / ((x2 - x0) * (x2 - x1) * (x2 - x3))
+
+    L3 = ((x - x0) * (x - x1) * (x - x2)) / ((x3 - x0) * (x3 - x1) * (x3 - x2))
+
+   
+
+    ' Calculate the interpolation polynomial
+
+LagrangeInterpolation8650 = y0 * L0 + y1 * L1 + y2 * L2 + y3 * L3
+
+End Function
+
+ 
+
+ 
+
+Function LagrangeInterpolation9000(ByVal x As Double) As Double
+
+    Dim x0 As Double, x1 As Double, x2 As Double, x3 As Double
+
+    Dim y0 As Double, y1 As Double, y2 As Double, y3 As Double
+
+    Dim L0 As Double, L1 As Double, L2 As Double, L3 As Double
+
+   
+
+    ' Given data points
+
+    x0 = 25: y0 = 94.5
+
+    x1 = 50: y1 = 96.7
+
+    x2 = 75: y2 = 97.2
+
+    x3 = 100: y3 = 97.3
+
+   
+
+' Calculate ex_HMBD_GeneratorEfficiency.Lagrange basis polynomials
+
+    L0 = ((x - x1) * (x - x2) * (x - x3)) / ((x0 - x1) * (x0 - x2) * (x0 - x3))
+
+    L1 = ((x - x0) * (x - x2) * (x - x3)) / ((x1 - x0) * (x1 - x2) * (x1 - x3))
+
+    L2 = ((x - x0) * (x - x1) * (x - x3)) / ((x2 - x0) * (x2 - x1) * (x2 - x3))
+
+    L3 = ((x - x0) * (x - x1) * (x - x2)) / ((x3 - x0) * (x3 - x1) * (x3 - x2))
+
+   
+
+    ' Calculate the interpolation polynomial
+
+LagrangeInterpolation9000 = y0 * L0 + y1 * L1 + y2 * L2 + y3 * L3
+
+End Function
+
+ 
+
+Function LagrangeInterpolation10000(ByVal x As Double) As Double
+
+    Dim x0 As Double, x1 As Double, x2 As Double, x3 As Double
+
+    Dim y0 As Double, y1 As Double, y2 As Double, y3 As Double
+
+    Dim L0 As Double, L1 As Double, L2 As Double, L3 As Double
+
+   
+
+    ' Given data points
+
+    x0 = 25: y0 = 94.3
+
+    x1 = 50: y1 = 96.3
+
+    x2 = 75: y2 = 96.9
+
+    x3 = 100: y3 = 97.3
+
+   
+
+    ' Calculate Lagrange basis polynomials
+
+    L0 = ((x - x1) * (x - x2) * (x - x3)) / ((x0 - x1) * (x0 - x2) * (x0 - x3))
+
+    L1 = ((x - x0) * (x - x2) * (x - x3)) / ((x1 - x0) * (x1 - x2) * (x1 - x3))
+
+    L2 = ((x - x0) * (x - x1) * (x - x3)) / ((x2 - x0) * (x2 - x1) * (x2 - x3))
+
+    L3 = ((x - x0) * (x - x1) * (x - x2)) / ((x3 - x0) * (x3 - x1) * (x3 - x2))
+
+   
+
+    ' Calculate the interpolation polynomial
+
+LagrangeInterpolation10000 = y0 * L0 + y1 * L1 + y2 * L2 + y3 * L3
+
+End Function
+
