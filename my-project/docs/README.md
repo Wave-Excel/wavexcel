@@ -43,7 +43,7 @@ The code follows one top-level dispatch path, then branches into sub-flows:
    - Heavy optimization flow (`Main_CustomFlowPathTest`) with custom DAT selection, PSO, custom ERG checks, valve optimization, and final power closure.
 
 5. **Additional load points flow**
-   - Activated in executed/custom when customer load points exceed base set (`CustomerLoadPoints.Count > 2`), and iterated LP-wise.
+   - Activated in standard/executed/custom when customer load points exceed base set (`CustomerLoadPoints.Count > 1`), and iterated LP-wise.
 
 ---
 
@@ -488,7 +488,7 @@ The custom flow sequence is:
 
 This path appears in both executed and custom flows when:
 
-- `AdditionalLoadPoint.GetInstance().CustomerLoadPoints.Count > 2`
+- `AdditionalLoadPoint.GetInstance().CustomerLoadPoints.Count > 1`
 
 LP-wise sequence:
 
@@ -514,7 +514,7 @@ LP-wise sequence:
 - `Standard` -> single baseline path -> ERG checks -> valve optimization -> power match.
 - `Executed` -> `BCD1120 / BCD1190 / Throttle` criteria sub-flow -> fallback chain -> power match.
 - `Custom` -> custom DAT + PSO + custom ERG criteria -> valve + final custom checks.
-- `Executed/Custom` + additional LP count -> `Additional Load Points LP-wise loop`.
+- `Standard/Executed/Custom` + additional LP count -> `Additional Load Points LP-wise loop`.
 
 ---
 
