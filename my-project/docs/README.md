@@ -99,7 +99,7 @@ flowchart TD
   C --> D["RefreshKreislDAT"]
  
  
-  subgraph T["Template selection - RefreshKreislDAT"]
+  subgraph tmplSel["Template selection - RefreshKreislDAT"]
     direction TB
  
  
@@ -115,7 +115,7 @@ flowchart TD
     P1 -- "No"  --> P3["Default to Without Desuperheater when ERG missing"]
  
  
-    P2 --> D1{"exhaustTemp < PST ?"}
+    P2 --> D1{"exhaustTemp below PST?"}
     D1 -- "Yes" --> T6a["Copy Without Desuperheater template (kreislwDesuperheater.dat)"]
     D1 -- "No"  --> T6b["Copy With Desuperheater template (kreislDesuperheater.dat)"]
     P3 --> T6a
@@ -129,7 +129,7 @@ flowchart TD
     TDSET --> ERGCHK{"File.Exists(KREISL.ERG) ?"}
     ERGCHK -- "Yes" --> EXTR["exhaustTemp = ExtractTempForDesuparator(KREISL.ERG, 3, 1)"]
     ERGCHK -- "No"  --> DEFWD["Default: CloseCyclePRVWDDump.DAT (ERG missing)"]
-    EXTR --> PRVCMP{"exhaustTemp < PST ?"}
+    EXTR --> PRVCMP{"exhaustTemp below PST?"}
     PRVCMP -- "Yes" --> TD1["Copy CloseCyclePRVWDDump.DAT"]
     PRVCMP -- "No"  --> TD1B["Copy CloseCyclePRVDDump.DAT"]
     DEFWD --> TD1
@@ -139,7 +139,7 @@ flowchart TD
     TD2_START --> TD2_ERG{"File.Exists(KREISL.ERG) ?"}
     TD2_ERG -- "Yes" --> TD2_EXTR["exhaustTemp = ExtractTempForDesuparator(KREISL.ERG, 3, 1)"]
     TD2_ERG -- "No" --> TD2_DEF["Default: CloseCyclePRVWDDump.DAT (ERG missing)"]
-    TD2_EXTR --> TD2_CMP{"exhaustTemp < PST ?"}
+    TD2_EXTR --> TD2_CMP{"exhaustTemp below PST?"}
     TD2_CMP -- "Yes" --> TD2_WD["Copy CloseCyclePRVWDDump.DAT"]
     TD2_CMP -- "No" --> TD2_D["Copy CloseCyclePRVDDump.DAT"]
     TD2_WD --> TD2_UPDATE["UpdateTemplatePRVToWPRVInDumpCondensor"]
@@ -152,7 +152,7 @@ flowchart TD
     TN1_SET --> TN1_ERG{"File.Exists(KREISL.ERG) ?"}
     TN1_ERG -- "Yes" --> TN1_EXTR["exhaustTemp = ExtractTempForDesuparator(KREISL.ERG, 3, 1)"]
     TN1_ERG -- "No" --> TN1_DEF["Default: Copy CloseCyclePRVWD.DAT (ERG missing)"]
-    TN1_EXTR --> TN1_CMP{"exhaustTemp < PST ?"}
+    TN1_EXTR --> TN1_CMP{"exhaustTemp below PST?"}
     TN1_CMP -- "Yes" --> TN1_WD["Copy CloseCyclePRVWD.DAT"]
     TN1_CMP -- "No" --> TN1_D["Copy CloseCyclePRVD.DAT"]
     TN1_DEF --> TN1_END
@@ -163,7 +163,7 @@ flowchart TD
     TN2_SET --> TN2_ERG{"File.Exists(KREISL.ERG) ?"}
     TN2_ERG -- "Yes" --> TN2_EXTR["exhaustTemp = ExtractTempForDesuparator(KREISL.ERG, 3, 1)"]
     TN2_ERG -- "No" --> TN2_DEF["Default: Copy CloseCyclePRVWD.DAT (ERG missing)"]
-    TN2_EXTR --> TN2_CMP{"exhaustTemp < PST ?"}
+    TN2_EXTR --> TN2_CMP{"exhaustTemp below PST?"}
     TN2_CMP -- "Yes" --> TN2_WD["Copy CloseCyclePRVWD.DAT"]
     TN2_CMP -- "No" --> TN2_D["Copy CloseCyclePRVD.DAT"]
     TN2_WD --> TN2_UPDATE["UpdateTemplatePRVToWPRV"]
@@ -293,7 +293,7 @@ Explanation:
 flowchart TD
   S79["7.9 Make Turba and Kreisl connection"] --> S791["7.9.1 Add varicode 40 in TURBATURBAE1.DAT.DAT"]
   S791 --> S710["7.10 Check Power"]
-  S710 --> C1{"Power diff <= 25?"}
+  S710 --> C1{"Power diff ≤ 25?"}
   C1 -- "No" --> STOP["Stop calculation"]
   C1 -- "Yes" --> S7101["7.10.1 HMBDUpdateEffKreisl"]
   S7101 --> S7102["7.10.2 Optimize no-load power"]
@@ -476,6 +476,67 @@ The executed flow sequence is:
   - Uses `ErgResultsCheckThrottle`.
   - Hard-limited retry count; beyond limit, flow returns and effectively shifts toward custom handling path.
 
+### 7.3 Executed main pipeline flowchart
+
+```mermaid
+flowchart TD
+  A["Init mainCallCounters, throttleCounters"]
+  B["Retry / fallback gates: Throttle ≤ MAX_THROTTLE_CALLS; BCD1120 → BCD1190; BCD1190 → custom"]
+  C["PowerKNN, MoveYAndSetParams (HMBD defaults + nearest project)"]
+  D["ReferenceDATSelectorExecuted"]
+  E["LoadDatFile, GenerateLoadPoints"]
+  F["PrepareDATFileExecuted"]
+  G{Wheel chamber pressure valid?}
+  H["LaunchTurba"]
+  I["ErgResultsCheckExecuted(criteria, false)"]
+  J["UpdateLP5"]
+  K["ErgResultsCheckExecuted(criteria, true)"]
+  L["ValvePointOptimize"]
+  M["FillVari40"]
+  N["Launch Turba"]
+  O["Rename TURBATURBAE1.DAT.CON to TURBA.CON"]
+  P["Fill wheel chamber pressure"]
+  Q["CheckPower"]
+
+  A --> B --> C --> D --> E --> F --> G
+  G -->|No: re-run selection| D
+  G -->|Yes| H --> I --> J --> K --> L --> M --> N --> O --> P --> Q
+```
+
+### 7.4 Executed criteria and ERG fallback flowchart
+
+Each criterion uses the matching ERG checker on **both** passes in the main pipeline (`ErgResultsCheckExecuted(criteria, false)` then after `UpdateLP5`, `ErgResultsCheckExecuted(criteria, true)`). This chart shows how criteria **hand off** when budgets are exhausted.
+
+```mermaid
+flowchart TD
+  C0{"Active executed criterion"}
+  E1["BCD1120: ErgResultsCheckBCD1120 (initial + LP5 passes)"]
+  E2{BCD1120 budget exhausted?}
+  E3["BCD1190: ErgResultsCheckBCD1190 (initial + LP5 passes)"]
+  E4{BCD1190 budget exhausted?}
+  CF["Main_CustomFlowPathTest"]
+  OK["Continue executed pipeline"]
+  T1["Throttle: ErgResultsCheckThrottle (initial + LP5 passes)"]
+  T2{Past MAX_THROTTLE_CALLS?}
+  T3["Return; toward custom handling path"]
+
+  C0 -->|BCD1120| E1
+  C0 -->|BCD1190| E3
+  C0 -->|Throttle| T1
+
+  E1 --> E2
+  E2 -->|Yes, handoff| E3
+  E2 -->|No| OK
+
+  E3 --> E4
+  E4 -->|Yes| CF
+  E4 -->|No| OK
+
+  T1 --> T2
+  T2 -->|Yes| T3
+  T2 -->|No| OK
+```
+
 ---
 
 ## 8) Flow-wise content: Custom flow path
@@ -505,11 +566,49 @@ The custom flow sequence is:
 12. LP5 update + second criterion check,
 13. custom valve point optimization (`CustomValvePointOptimizer`),
 14. final closure:
-   - `FillVari40`
-   - Turba launch
-   - rename/load final CON
-   - fill wheel chamber pressure
-   - custom power match + final checks (`checkFinalTurbine`).
+    - `FillVari40`
+    - Turba launch
+    - rename/load final CON
+    - fill wheel chamber pressure
+    - custom power match + final checks (`checkFinalTurbine`).
+
+### 8.2 Custom flow path flowchart
+
+```mermaid
+flowchart TD
+  A["DeleteCONFiles, RefreshKreislDAT"]
+  B["Read nearest Turba context; fill input values"]
+  C["Set HMBD defaults + initial efficiency setup"]
+  D["CustomLoadPointGenerator.GenerateLoadPoints"]
+  E["fillPrefeasibilityDecisionChecks"]
+  F["GetNearestParams_Custom"]
+  G["Delete executed DAT"]
+  H["Copy custom reference DAT"]
+  I["CustomDATFileProcessor.PrepareDatFile"]
+  J["BCD_UPDATE"]
+  K["InvokeTurbineDesigner (PSO flow optimizer)"]
+  L["ERG_CUSTOM_BASE_CHECKS"]
+  M["TurnaConvert, UpdatePunConvertor"]
+  N["Launch Turba"]
+  Q{"ERG criterion from pre-feasibility"}
+  R1120["Custom BCD1120 check"]
+  R1190["Custom BCD1190 check"]
+  S["LP5 update + second criterion check"]
+  T["CustomValvePointOptimizer"]
+  U["FillVari40"]
+  V["Launch Turba"]
+  W["Rename / load final CON"]
+  X["Fill wheel chamber pressure"]
+  Y["checkFinalTurbine (custom power match + final checks)"]
+
+  A --> B --> C --> D --> E --> F --> G --> H --> I --> J --> K --> L --> M --> N
+  N --> Q
+  Q -->|BCD1120| R1120
+  Q -->|BCD1190| R1190
+  R1120 --> S
+  R1190 --> S
+  S --> T --> U --> V --> W --> X --> Y
+```
 
 ---
 
@@ -549,6 +648,7 @@ LP-wise sequence:
 
 ## 11) Notes
 
+- If diagrams show as a `mermaid` **code block** instead of a picture, your editor preview is not rendering Mermaid (re-enable a **Markdown Mermaid** extension, or view this file on GitHub). A recent Cursor/VS Code or extension update can turn that off.
 - This README is code-logic first and intentionally flow-oriented.
 - Keep terminology as in code where possible (`DumpCondensor`, `DeaeratorOutletTemp`, `IsPRVTemplate`) to avoid mismatch.
 - Extend each section with diagrams and method-level call mapping as documentation evolves.
