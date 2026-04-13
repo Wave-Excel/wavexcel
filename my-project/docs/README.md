@@ -193,6 +193,35 @@ flowchart TD
   V --> W["PowerMatch.CheckPower"]
 ```
 
+### 5.0 End-to-end pipeline (shared diagram)
+
+This is the clean top-level view of how inputs move through template selection, efficiency, prefeasibility, and the Standard → Executed → Custom fallback chain before **Create HMBD**. It sits before the detailed Standard-path splits in §5.1.
+
+![End-to-end pipeline: inputs through prefeasibility to Standard / Executed / Custom and HMBD](assets/pipeline-hmbd-flowchart.png)
+
+```mermaid
+flowchart TD
+  P1([1. Inputs])
+  P2[2. Find missing parameters, create flow chart + explanation]
+  P3[3. Decide Kreisl template based on input, flow chart prepared]
+  P4[4. Find nearest efficiency]
+  P5[5. Compute power and volumetric flow from efficiency and Kreisl template]
+  P6{6. Prefeasibility check}
+  P7[7. Standard flow path]
+  P8[8. Executed flow path]
+  P9[9. Custom flow path]
+  P10([10. Create HMBD])
+
+  P1 --> P2 --> P3 --> P4 --> P5 --> P6
+  P6 -->|Criteria 1| P7
+  P6 -->|Criteria 2| P8
+  P7 -->|success| P10
+  P7 -->|if fail| P8
+  P8 -->|success| P10
+  P8 -->|if fail| P9
+  P9 --> P10
+```
+
 ### 5.1 Standard flow path chart (clean split, as shared)
 
 To keep the Standard section readable (not messy), the same logic is split into smaller charts exactly like your diagram style.
