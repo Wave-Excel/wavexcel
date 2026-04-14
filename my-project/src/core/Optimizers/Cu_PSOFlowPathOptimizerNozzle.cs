@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Linq;
 using System.Collections.Generic;
@@ -14,6 +14,7 @@ using Turba.Cu_TurbaConfig;
 using HMBD.Cu_CW_Curve;
 using DocumentFormat.OpenXml.Drawing.Charts;
 using System.Text;
+using System.Text.Json;
 
 namespace Optimizers.PSOFlowPathNozzle
 {
@@ -48,6 +49,7 @@ namespace Optimizers.PSOFlowPathNozzle
         // Stores CSV data rows
         private List<string> csvRows = new List<string>();
         List<double> thrustValues = new List<double>();
+        private string nozzleDatFilePath;
 
 
 
@@ -107,6 +109,9 @@ namespace Optimizers.PSOFlowPathNozzle
                 .AddJsonFile("src/core/Config/appsettings.json", optional: false, reloadOnChange: true)
                 .Build();
             psoIteration = configuration.GetValue<int>("AppSettings:PSO_Iteration");
+            nozzleDatFilePath = configuration.GetValue<string>("AppSettings:NozzleDatFilePath");
+            if (string.IsNullOrWhiteSpace(nozzleDatFilePath))
+                nozzleDatFilePath = @"C:\testDir\TURBATURBAE1.DAT.DAT";
             preFeasibilityDataModel = PreFeasibilityDataModel.getInstance();
             turbineDataModel = TurbineDataModel.getInstance();
             turbaOutputModel = TurbaOutputModel.getInstance();
@@ -282,6 +287,15 @@ namespace Optimizers.PSOFlowPathNozzle
 
         public void InvokeTurbineDesigner()
         {
+            bool useOllama = configuration.GetValue<bool>("AppSettings:UseOllamaGuidedNozzle");
+            if (useOllama)
+            {
+                Logger("Starting Ollama-guided nozzle DAT optimization (local LLM proposes next B,R,D,I,A; Turba + penalty are authoritative).");
+                InvokeOllamaGuidedOptimizer();
+                Logger("___________________________________________________");
+                return;
+            }
+
             Logger("Starting Relationship-Aware PSO Optimization");
             Logger("Relationships loaded from engineering table:");
             foreach (var rel in relationships.Values)
@@ -330,17 +344,21 @@ namespace Optimizers.PSOFlowPathNozzle
             FinalEvaluation();
         }
 
-        public void InitializeParticles()
+        private void InitializeParameterBounds()
         {
             double inletPressure = preFeasibilityDataModel.InletPressureActualValue;
             double backPressure = preFeasibilityDataModel.BackpressureActualValue;
 
-            // Conservative parameter bounds based on log analysis
-            MinValues[0] = 0.14; MaxValues[0] = 0.78; Steps[0] = 0.03; // BEAUFSCHL - Reduced upper bound
-            MinValues[1] = Math.Max(15, backPressure + 5); MaxValues[1] = 0.8 * inletPressure; Steps[1] = 4; // RADKAMMER - Reduced upper bound
-            MinValues[2] = -11; MaxValues[2] = -6; Steps[2] = 1; // DRUCKZIFFERN
-            MinValues[3] = 200; MaxValues[3] = 230; Steps[3] = 5; // INNENDURCHMESSER
-            MinValues[4] = 240; MaxValues[4] = 270; Steps[4] = 5; // AUSGLEICHSKOLBEN
+            MinValues[0] = 0.14; MaxValues[0] = 0.78; Steps[0] = 0.03;
+            MinValues[1] = Math.Max(15, backPressure + 5); MaxValues[1] = 0.8 * inletPressure; Steps[1] = 4;
+            MinValues[2] = -11; MaxValues[2] = -6; Steps[2] = 1;
+            MinValues[3] = 200; MaxValues[3] = 230; Steps[3] = 5;
+            MinValues[4] = 240; MaxValues[4] = 270; Steps[4] = 5;
+        }
+
+        public void InitializeParticles()
+        {
+            InitializeParameterBounds();
 
             // Initialize particles with relationship-guided positioning
             for (int i = 0; i < NumParticles; i++)
@@ -1461,6 +1479,357 @@ namespace Optimizers.PSOFlowPathNozzle
             Logger("```````````````````````````````````````````````````````");
         }
 
+        private string GetNozzleCheckType()
+        {
+            bool G14 = preFeasibilityDataModel.Decision == "TRUE";
+            bool G26 = preFeasibilityDataModel.Decision_2 == "TRUE";
+            if (G14) return "1120";
+            if (!G14 && G26) return "1190";
+            return "unknown";
+        }
+
+        private static bool TryParseDatFixedField(string line, int startIndex1Based, int length, out double value)
+        {
+            value = 0;
+            if (string.IsNullOrEmpty(line) || startIndex1Based < 1 || startIndex1Based + length - 1 > line.Length)
+                return false;
+            var s = line.Substring(startIndex1Based - 1, length).Trim();
+            return double.TryParse(s, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out value);
+        }
+
+        /// <summary>Reads B,R,D,I,A from the nozzle DAT using the same layout as <see cref="UpdateDATSoftChecks"/>.</summary>
+        private double[] TryReadDatParameters()
+        {
+            if (!File.Exists(nozzleDatFilePath))
+            {
+                Logger($"Read DAT: file not found at {nozzleDatFilePath}");
+                return null;
+            }
+
+            try
+            {
+                var fileLines = File.ReadAllText(nozzleDatFilePath).Split(new[] { Environment.NewLine }, StringSplitOptions.None);
+                string parameterB = "!ND   DM REGELR";
+                string parameterR = "!     RADKAMMER";
+                string parameterD = "!               DRUCKZIFFERN";
+                string parameterI = "!               INNENDURCHMESSER";
+                string parameterA = "!               AUSGLEICHSKOLBENDURCHMESSER";
+                double b = 0, r = 0, d = 0, ii = 0, a = 0;
+                bool fb = false, fr = false, fd = false, fi = false, fa = false;
+
+                for (int lineNumber = 0; lineNumber < fileLines.Length; lineNumber++)
+                {
+                    if (fileLines[lineNumber].Contains(parameterB) && lineNumber + 1 < fileLines.Length)
+                    {
+                        lineNumber++;
+                        fb = TryParseDatFixedField(fileLines[lineNumber], 17, 9, out b);
+                    }
+                    else if (fileLines[lineNumber].Contains(parameterR) && lineNumber + 1 < fileLines.Length)
+                    {
+                        lineNumber++;
+                        fr = TryParseDatFixedField(fileLines[lineNumber], 7, 9, out r);
+                    }
+                    else if (fileLines[lineNumber].Contains(parameterD) && lineNumber + 1 < fileLines.Length)
+                    {
+                        lineNumber++;
+                        fd = TryParseDatFixedField(fileLines[lineNumber], 17, 9, out d);
+                    }
+                    else if (fileLines[lineNumber].Contains(parameterI) && lineNumber + 1 < fileLines.Length)
+                    {
+                        lineNumber++;
+                        fi = TryParseDatFixedField(fileLines[lineNumber], 17, 9, out ii);
+                    }
+                    else if (fileLines[lineNumber].Contains(parameterA) && lineNumber + 1 < fileLines.Length)
+                    {
+                        lineNumber++;
+                        fa = TryParseDatFixedField(fileLines[lineNumber], 17, 9, out a);
+                    }
+                }
+
+                if (!fb || !fr || !fd || !fi || !fa)
+                {
+                    Logger("Read DAT: could not parse all five parameters from markers.");
+                    return null;
+                }
+
+                return new[] { b, r, d, ii, a };
+            }
+            catch (Exception ex)
+            {
+                Logger($"Read DAT error: {ex.Message}");
+                return null;
+            }
+        }
+
+        private double[] SnapVector(double[] vector)
+        {
+            var v = new double[5];
+            for (int j = 0; j < 5; j++)
+            {
+                v[j] = Math.Max(MinValues[j], Math.Min(MaxValues[j], vector[j]));
+                v[j] = Math.Round(v[j] / Steps[j]) * Steps[j];
+            }
+            return v;
+        }
+
+        private double[] ReadCurrentDatParametersAndSnap()
+        {
+            var raw = TryReadDatParameters();
+            if (raw == null) return null;
+            return SnapVector(raw);
+        }
+
+        /// <summary>
+        /// Engineering limits on ERG outputs aligned with <see cref="HMBD.PSO_PenalityFunctionNozzle.PenaltyScoreCalculator"/> hard checks (BCD-specific).
+        /// Gives the LLM context for how far outputs must move when adjusting B,R,D,I,A.
+        /// </summary>
+        private (object limits, string summary) BuildOutputLimitsForSnapshot(OutputLoadPoint o, string checkType)
+        {
+            double nozzleLo = configuration.GetValue<double?>("AppSettings:Nozzle_height_Limits_Lower") ?? 10.5;
+            double nozzleHi = configuration.GetValue<double?>("AppSettings:Nozzle_height_Limits_Upper") ?? 27.0;
+            int? nozzleAreaCfg = configuration.GetValue<int?>("AppSettings:Nozzle_Area_UpperLim");
+            int fminUpper = (nozzleAreaCfg.HasValue && nozzleAreaCfg.Value > 0) ? nozzleAreaCfg.Value : 1430;
+            const double thrustAbsLimit = 0.8;
+
+            if (checkType == "1190")
+            {
+                double deltaTMax = 210;
+                double inletT = preFeasibilityDataModel.TemperatureActualValue;
+                double wheelP = o.Wheel_Chamber_Pressure;
+                double wheelTempUpper = inletT <= 500
+                    ? WheelChamberTempCurveWithCW1GetUpperLimit(wheelP)
+                    : WheelChamberTempCurveWithCW2GetUpperLimit(wheelP);
+                bool varicode7 = false;
+                double gbcMax = varicode7 ? 356 : 370;
+
+                var limits = new
+                {
+                    bcd = "1190",
+                    HOEHE = new { lowerLimit = nozzleLo, upperLimit = nozzleHi, unit = "nozzle height (penalty band)" },
+                    FMIN1 = new { lowerLimitExclusive = 0, upperLimit = fminUpper, note = "nozzle area G1; must be > 0 and <= upperLimit" },
+                    DELTA_T = new { lowerLimitExclusive = 0, upperLimit = deltaTMax, note = "GBC delta T" },
+                    Wheel_Chamber_Temperature = new { lowerLimitExclusive = 0, upperLimit = wheelTempUpper, note = "upper from CW curve at current wheel chamber P; inlet-based CW1 vs CW2" },
+                    Wheel_Chamber_Pressure = new { note = "used with inlet T to set wheel temp ceiling; not a simple fixed bound" },
+                    GBC_Length = new { lowerLimitExclusive = 0, upperLimit = gbcMax, note = "varicode7=false => 370 else 356" },
+                    thrustPerLp = new { perLoadPoint_absMax = thrustAbsLimit, note = "each load point thrust must stay in [-0.8, 0.8]" },
+                    Check_PSI = new { mustBe = "TRUE", note = "PSI gate from Turba; failing rows drive penalty" },
+                    Lang = new { mustBeString = "TRUE", note = "LANG check" },
+                    Efficiency = new { note = "informational for optimization objective; not a hard band in penalty JSON" },
+                    Power_KW = new { note = "informational" }
+                };
+
+                string summary =
+                    $"BCD1190 output bands: HOEHE [{nozzleLo},{nozzleHi}]; FMIN1 in (0,{fminUpper}]; DELTA_T in (0,{deltaTMax}]; " +
+                    $"Wheel_T <= {wheelTempUpper:F1} (curve at P={wheelP:F3}); GBC_Length in (0,{gbcMax}]; " +
+                    $"each thrust in [-{thrustAbsLimit},{thrustAbsLimit}]; PSI/Lang checks must pass.";
+                return (limits, summary);
+            }
+
+            if (checkType == "1120")
+            {
+                double deltaTMax = 240;
+                double wheelTempMax = 410;
+                double gbcMax = 318;
+
+                var limits = new
+                {
+                    bcd = "1120",
+                    HOEHE = new { lowerLimit = nozzleLo, upperLimit = nozzleHi, unit = "nozzle height (penalty band)" },
+                    FMIN1 = new { lowerLimitExclusive = 0, upperLimit = fminUpper, note = "nozzle area G1" },
+                    DELTA_T = new { lowerLimitExclusive = 0, upperLimit = deltaTMax, note = "GBC delta T" },
+                    Wheel_Chamber_Temperature = new { lowerLimitExclusive = 0, upperLimit = wheelTempMax, note = "fixed ceiling °C for BCD1120" },
+                    Wheel_Chamber_Pressure = new { note = "informational for thermodynamics" },
+                    GBC_Length = new { lowerLimitExclusive = 0, upperLimit = gbcMax, note = "GBC length cap" },
+                    thrustPerLp = new { perLoadPoint_absMax = thrustAbsLimit, note = "each in [-0.8, 0.8]" },
+                    Check_PSI = new { mustBe = "TRUE", note = "PSI gate" },
+                    Lang = new { mustBeString = "TRUE", note = "LANG check (1120 reads output Lang)" },
+                    Efficiency = new { note = "informational" },
+                    Power_KW = new { note = "informational" }
+                };
+
+                string summary =
+                    $"BCD1120 output bands: HOEHE [{nozzleLo},{nozzleHi}]; FMIN1 in (0,{fminUpper}]; DELTA_T in (0,{deltaTMax}]; " +
+                    $"Wheel_T in (0,{wheelTempMax}]; GBC_Length in (0,{gbcMax}]; thrust per LP in [-{thrustAbsLimit},{thrustAbsLimit}]; PSI/Lang must pass.";
+                return (limits, summary);
+            }
+
+            var fallback = new
+            {
+                bcd = checkType,
+                HOEHE = new { lowerLimit = nozzleLo, upperLimit = nozzleHi },
+                FMIN1 = new { upperLimit = fminUpper },
+                note = "Unknown BCD; use parameterLimits for DAT knobs; verify penalty source for exact output bands."
+            };
+            return (fallback, "BCD unknown: partial limits only; confirm checkType.");
+        }
+
+        private string BuildOllamaSnapshotJson(double[] vector, double penalty, double efficiency)
+        {
+            var o = turbaOutputModel.OutputDataList[0];
+            var checkType = GetNozzleCheckType();
+            var (outputLimits, outputLimitsSummary) = BuildOutputLimitsForSnapshot(o, checkType);
+
+            var checks = new Dictionary<string, string>
+            {
+                ["Check_HOEHE"] = turbaOutputModel.Check_HOEHE,
+                ["Check_FMIN1"] = turbaOutputModel.Check_FMIN1,
+                ["Check_DELTA_T"] = turbaOutputModel.Check_DELTA_T,
+                ["Check_Wheel_Chamber_Temperature"] = turbaOutputModel.Check_Wheel_Chamber_Temperature,
+                ["Check_GBC_Length"] = turbaOutputModel.Check_GBC_Length,
+                ["Check_PSI"] = turbaOutputModel.Check_PSI,
+                ["Check_Lang"] = turbaOutputModel.Check_Lang,
+                ["Check_Thrust"] = turbaOutputModel.Check_Thrust,
+            };
+            int nlp = mxlp > 0 ? mxlp : Math.Min(10, turbaOutputModel.OutputDataList.Count);
+            var thrustSlice = turbaOutputModel.OutputDataList.Take(nlp).Select(lp => lp.Thrust).ToList();
+
+            var parameterLimits = new
+            {
+                B = new { description = "BEAUFSCHL (admission)", lowerLimit = MinValues[0], upperLimit = MaxValues[0], step = Steps[0] },
+                R = new { description = "RADKAMMER (wheel chamber pressure)", lowerLimit = MinValues[1], upperLimit = MaxValues[1], step = Steps[1] },
+                D = new { description = "DRUCKZIFFERN (stages; negative encoding as in DAT)", lowerLimit = MinValues[2], upperLimit = MaxValues[2], step = Steps[2] },
+                I = new { description = "INNENDURCHMESSER (shaft diameter)", lowerLimit = MinValues[3], upperLimit = MaxValues[3], step = Steps[3] },
+                A = new { description = "AUSGLEICHSKOLBEN (balance piston)", lowerLimit = MinValues[4], upperLimit = MaxValues[4], step = Steps[4] }
+            };
+
+            string limitsSummary =
+                $"B: lowerLimit={MinValues[0]:G9} upperLimit={MaxValues[0]:G9} step={Steps[0]:G9}; " +
+                $"R: lowerLimit={MinValues[1]:G9} upperLimit={MaxValues[1]:G9} step={Steps[1]:G9}; " +
+                $"D: lowerLimit={MinValues[2]:G9} upperLimit={MaxValues[2]:G9} step={Steps[2]:G9}; " +
+                $"I: lowerLimit={MinValues[3]:G9} upperLimit={MaxValues[3]:G9} step={Steps[3]:G9}; " +
+                $"A: lowerLimit={MinValues[4]:G9} upperLimit={MaxValues[4]:G9} step={Steps[4]:G9}. " +
+                "Every proposed value must satisfy lowerLimit <= value <= upperLimit and align to step (snap to grid).";
+
+            var snapshot = new
+            {
+                checkType,
+                current = new { B = vector[0], R = vector[1], D = vector[2], I = vector[3], A = vector[4] },
+                parameterLimits,
+                limitsSummary,
+                outputLimits,
+                outputLimitsSummary,
+                bounds = new[]
+                {
+                    new { name = "B", lowerLimit = MinValues[0], upperLimit = MaxValues[0], step = Steps[0], min = MinValues[0], max = MaxValues[0] },
+                    new { name = "R", lowerLimit = MinValues[1], upperLimit = MaxValues[1], step = Steps[1], min = MinValues[1], max = MaxValues[1] },
+                    new { name = "D", lowerLimit = MinValues[2], upperLimit = MaxValues[2], step = Steps[2], min = MinValues[2], max = MaxValues[2] },
+                    new { name = "I", lowerLimit = MinValues[3], upperLimit = MaxValues[3], step = Steps[3], min = MinValues[3], max = MaxValues[3] },
+                    new { name = "A", lowerLimit = MinValues[4], upperLimit = MaxValues[4], step = Steps[4], min = MinValues[4], max = MaxValues[4] },
+                },
+                penalty,
+                efficiency,
+                checks,
+                outputs = new
+                {
+                    o.HOEHE,
+                    o.FMIN1,
+                    o.DELTA_T,
+                    o.Wheel_Chamber_Pressure,
+                    o.Wheel_Chamber_Temperature,
+                    o.GBC_Length,
+                    o.Efficiency,
+                    o.Power_KW,
+                    o.Lang,
+                    thrustPerLp = thrustSlice
+                },
+                note = "Propose only B,R,D,I,A. Respect parameterLimits/limitsSummary for inputs and outputLimits/outputLimitsSummary for Turba ERG feasibility (penalty checks); invalid DAT values are rejected by the optimizer."
+            };
+            return JsonSerializer.Serialize(snapshot, new JsonSerializerOptions { WriteIndented = true });
+        }
+
+        private static string TruncateForLog(string s, int maxLen)
+        {
+            if (string.IsNullOrEmpty(s) || s.Length <= maxLen) return s;
+            return s.Substring(0, maxLen) + "...";
+        }
+
+        /// <summary>Ollama proposes next DAT parameters; requires local Ollama and model (see appsettings Ollama section).</summary>
+        public void InvokeOllamaGuidedOptimizer()
+        {
+            InitializeParameterBounds();
+            var vector = ReadCurrentDatParametersAndSnap();
+            if (vector == null)
+            {
+                Logger("Ollama-guided mode: failed to read seed B,R,D,I,A from DAT.");
+                return;
+            }
+
+            int maxIter = configuration.GetValue<int>("Ollama:MaxIterations");
+            if (maxIter <= 0) maxIter = 25;
+
+            GlobalBestFitness = double.MinValue;
+            GlobalBestEfficiency = 0;
+
+            using (var advisor = new OllamaTurbaAdvisor(configuration, Logger))
+            {
+                for (int iter = 1; iter <= maxIter; iter++)
+                {
+                    Logger($"=== Ollama-guided iteration {iter}/{maxIter} ===");
+                    Logger($"Parameters: B={vector[0]:F3}, R={vector[1]:F1}, D={vector[2]:F0}, I={vector[3]:F0}, A={vector[4]:F0}");
+
+                    RunBlackboxApplication(vector[0], vector[1], vector[2], vector[3], vector[4]);
+
+                    thrustValues.Clear();
+                    int nlp = mxlp > 0 ? mxlp : turbaOutputModel.OutputDataList.Count;
+                    for (int lp = 0; lp < nlp && lp < turbaOutputModel.OutputDataList.Count; lp++)
+                        thrustValues.Add(turbaOutputModel.OutputDataList[lp].Thrust);
+
+                    double penalty = GetPenaltyScore();
+                    double efficiency = turbaOutputModel.OutputDataList[0].Efficiency;
+                    double power = turbaOutputModel.OutputDataList[0].Power_KW;
+                    CollectResultForCSV(
+                        turbineDataModel.InletPressure,
+                        turbineDataModel.InletTemperature,
+                        turbineDataModel.MassFlowRate,
+                        turbineDataModel.ExhaustPressure,
+                        vector[0], vector[1], vector[2], vector[3], vector[4],
+                        efficiency,
+                        power,
+                        penalty,
+                        turbaOutputModel.OutputDataList[0].HOEHE,
+                        turbaOutputModel.OutputDataList[0].DELTA_T,
+                        turbaOutputModel.OutputDataList[0].Wheel_Chamber_Pressure,
+                        turbaOutputModel.OutputDataList[0].Wheel_Chamber_Temperature,
+                        turbaOutputModel.OutputDataList[0].Lang,
+                        turbaOutputModel.Check_PSI,
+                        turbaOutputModel.OutputDataList[0].GBC_Length,
+                        turbaOutputModel.OutputDataList[0].FMIN1,
+                        thrustValues
+                    );
+
+                    if (penalty == 0)
+                    {
+                        Logger($"Ollama-guided mode: feasible (penalty=0) at iteration {iter}. Efficiency={efficiency:F6}%");
+                        GlobalBestFitness = efficiency;
+                        GlobalBestEfficiency = efficiency;
+                        for (int j = 0; j < 5; j++) GlobalBestPosition[j] = vector[j];
+                        break;
+                    }
+
+                    string snapshot = BuildOllamaSnapshotJson(vector, penalty, efficiency);
+                    var proposed = advisor.ProposeNextParameters(snapshot, out string rawOut);
+                    if (!string.IsNullOrEmpty(rawOut))
+                        Logger($"Ollama assistant output ({TruncateForLog(rawOut, 800)})");
+
+                    if (proposed == null)
+                    {
+                        Logger("Ollama returned no valid proposal; using ApplyConstraintSpecificCorrection as fallback.");
+                        for (int j = 0; j < 5; j++) Position[0, j] = vector[j];
+                        ApplyConstraintSpecificCorrection(0, penalty);
+                        vector = new double[5];
+                        for (int j = 0; j < 5; j++) vector[j] = Position[0, j];
+                        vector = SnapVector(vector);
+                    }
+                    else
+                    {
+                        vector = SnapVector(proposed);
+                    }
+                }
+            }
+
+            Logger($"Ollama-guided mode finished. GlobalBestEfficiency={GlobalBestEfficiency:F6} GlobalBestFitness={GlobalBestFitness:F6}");
+        }
+
         // Rest of the methods remain the same as in your original code...
         public void RunBlackboxApplication(double variableB, double variableR, double variableD, double variableI, double variableA)
         {
@@ -1470,7 +1839,7 @@ namespace Optimizers.PSOFlowPathNozzle
 
         public void UpdateDATSoftChecks(double variableB, double variableR, double variableD, double variableI, double variableA)
         {
-            string filePath = @"C:\testDir\TURBATURBAE1.DAT.DAT";
+            string filePath = nozzleDatFilePath;
 
             if (!File.Exists(filePath))
             {

@@ -264,6 +264,11 @@ public class CustomExecutedClass
 
         RelationshipAwarePSOOptimizer pSOFlowPathOptimizerNozzle = new RelationshipAwarePSOOptimizer();
 
+        if (configuration.GetValue<bool>("AppSettings:UseOllamaGuidedNozzle"))
+            Logger("WAVEXCEL: Nozzle optimizer mode = Ollama-guided (local Ollama must be running; see appsettings Ollama section).");
+        else
+            Logger("WAVEXCEL: Nozzle optimizer mode = PSO (set AppSettings:UseOllamaGuidedNozzle=true for Ollama).");
+
         Logger("WAVEXCEL: PSO FLOW OPTIMISZER");
         RelationshipAwarePSOOptimizer.mxlp = mxlp;
         pSOFlowPathOptimizerNozzle.InvokeTurbineDesigner();
