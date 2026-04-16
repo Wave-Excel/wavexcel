@@ -537,6 +537,342 @@ flowchart TD
   T2 -->|No| OK
 ```
 
+### 7.5 `MainExecuted(criteria, maxLp)` in-depth flow and purpose
+
+This is the **main controller** for the executed flow path.
+
+In simple terms, it:
+
+1. decides whether the current criterion is still allowed to run,
+2. selects the nearest executed reference project,
+3. rebuilds the DAT with executed load points,
+4. runs Turba,
+5. applies criterion-specific ERG checks,
+6. updates LP5 and checks again,
+7. optimizes valve behavior,
+8. performs final stabilization and power matching,
+9. falls back to the next path if the current executed path cannot close.
+
+#### 7.5.1 Easy overall picture
+
+```mermaid
+flowchart TD
+  A["MainExecuted(criteria, maxLp)"]
+  B["Initialize / update call counters"]
+  C{"Criterion still allowed?"}
+  D["Throttle return or fallback to next path"]
+  E["Set executed HMBD defaults"]
+  F["PowerKNN + MoveYAndSetParams"]
+  G["ReferenceDATSelectorExecuted(criteria)"]
+  H["LoadDatFile + GenerateLoadPoints"]
+  I["PrepareDATFileExecuted(maxLp)"]
+  J{"Wheel chamber pressure valid?"}
+  K["Re-run MainExecuted(criteria, maxLp)"]
+  L["LaunchTurba(maxLp)"]
+  M["ErgResultsCheckExecuted(criteria, false)"]
+  N["UpdateLP5()"]
+  O["ErgResultsCheckExecuted(criteria, true)"]
+  P["ValvePointOptimize(maxLp)"]
+  Q["Final stabilization: FillVari40 + Turba + TURBA.CON + wheel pressure"]
+  R["CheckPower(maxLp)"]
+  S["Additional load points / Kreisl merge if needed"]
+
+  A --> B --> C
+  C -->|No| D
+  C -->|Yes| E --> F --> G --> H --> I --> J
+  J -->|No| K
+  J -->|Yes| L --> M --> N --> O --> P --> Q --> R --> S
+```
+
+#### 7.5.2 Counter and fallback logic
+
+Before the executed calculation starts, `MainExecuted()` checks whether the current criterion is still allowed to continue.
+
+- `mainCallCounters` tracks retries for `BCD1120` and `BCD1190`
+- `throttleCounters` tracks retries for `Throttle`
+- `MAX_THROTTLE_CALLS = 2`
+
+Behavior:
+
+- if the criterion is `Throttle` and the retry limit is exceeded, the method returns and effectively gives up on the throttle-executed path
+- if `BCD1120` exceeds its allowed neighbor/call budget, the flow resets state and hands off to `BCD1190`
+- if `BCD1190` exceeds its budget, the flow moves to `Main_CustomFlowPathTest(maxLp)`
+
+So this method is not just a run pipeline. It is also the **gatekeeper for executed-path retry and fallback policy**.
+
+#### 7.5.3 Main executed setup phase
+
+Once the criterion is accepted, the method performs the executed-run setup:
+
+1. HMBD defaults are initialized:
+   - `HBDsetDefaultCustomerParamas_Executed()` or Kreisl-specific variant
+2. nearest executed candidates are resolved:
+   - `PowerKNN(criteria)`
+   - `MoveYAndSetParams()`
+3. the executed DAT is selected:
+   - `ReferenceDATSelectorExecuted(criteria)`
+4. the selected DAT is loaded:
+   - `LoadDatFile()`
+5. executed load points are generated:
+   - `GenerateLoadPoints(maxLp)`
+6. turbine efficiency from the nearest match is pushed into runtime state:
+   - `HBDupdateEfficiency(efficiency)`
+7. the DAT is rebuilt for the executed run:
+   - `PrepareDATFileExecuted(maxLp)`
+
+This means the executed flow first establishes the **nearest known project context**, then rewrites that selected DAT around the current request.
+
+### 7.6 `ReferenceDATSelectorExecuted(criteria)` in-depth flow and purpose
+
+This step is the executed-flow **reference project selector**.
+
+It does not build a DAT from scratch. Instead, it chooses the closest executed reference project for the active criterion and copies that DAT into the working area.
+
+```mermaid
+flowchart TD
+  A["ReferenceDATSelectorExecuted(criteria)"]
+  B["GetFlowPathExecuted(criteria)"]
+  C{"Criterion"}
+  D["SelectExecutedFlowPath(BCD1120)"]
+  E["SelectExecutedFlowPath(BCD1190)"]
+  F["SelectExecutedFlowPath(Throttle)"]
+  G["Read nearest candidates from ListPower"]
+  H["Match project name inside ExecutedDB"]
+  I["Store ClosestProjectID / ClosestProjectName / DatFilePath"]
+  J["CopyRefDATFile(path)"]
+  K["Working executed DAT ready"]
+
+  A --> B --> C
+  C -->|BCD1120| D
+  C -->|BCD1190| E
+  C -->|Throttle| F
+  D --> G
+  E --> G
+  F --> G
+  G --> H --> I --> J --> K
+```
+
+What it really does:
+
+- `SelectExecutedFlowPath(criteria)` loops through the nearest candidates already prepared in `turbineDataModel.ListPower`
+- it looks for entries marked with `KNearest == "Y"`
+- it matches those candidate names against `ExecutedDB.ExecutedProjectDB`
+- once it finds the matching project:
+  - stores closest project metadata in `TurbineDataModel`
+  - returns the DAT file path
+- `CopyRefDATFile(path)` then copies that chosen executed DAT into the active runtime area
+
+So this is the step that converts “nearest executed project” into an actual working DAT file.
+
+### 7.7 `PrepareDATFileExecuted(maxLp)` in-depth flow and purpose
+
+This method is the executed-flow **DAT reconstruction step**.
+
+It rewrites the selected executed DAT with the generated executed load points and then refreshes executed-specific non-LP initialization values.
+
+```mermaid
+flowchart TD
+  A["PrepareDATFileExecuted(maxLp)"]
+  B["LoadDatFile()"]
+  C["LoadLP1FromDat()"]
+  D["DeleteRowAfterFirstLoadPoint()"]
+  E["InsertDataLineUnderFirstLPFixed()"]
+  F["DeleteLoadPoints()"]
+  G["InsertLoadPointsWithExactFormattingUsingMid(maxLp)"]
+  H["InsertDataLineUnderND(totalLps)"]
+  I["DatFileInitParamsExceptLPExecuted()"]
+  J["Executed DAT ready for Turba"]
+
+  A --> B --> C --> D --> E --> F --> G --> H --> I --> J
+```
+
+Important meaning:
+
+- LP1 is preserved from the selected executed reference DAT
+- old LP blocks are removed
+- new executed LPs are inserted
+- the ND/load-point count line is updated
+- executed-specific DAT init parameters are refreshed after LP insertion
+
+So this is the executed equivalent of the custom DAT rebuild step.
+
+### 7.8 `UpdateLP5()` in-depth flow and purpose
+
+This method regenerates the special LP5 case before the second ERG pass.
+
+It uses current turbine inlet conditions and derives a corrective LP5 condition:
+
+- pressure = inlet pressure
+- temperature = inlet temperature minus a computed offset
+- mass flow = current inlet mass flow
+- back pressure = `0.5 * ExhaustPressure`
+- RPM = LP1 RPM
+- several flags (`InFlow`, `BYP`, `EIN`, `WANZ`, `RSMIN`) are reset
+
+```mermaid
+flowchart TD
+  A["UpdateLP5()"]
+  B["temp = InletTemperature - tsatvonp(InletPressure)"]
+  C{"temp >= 110?"}
+  D["Set temp offset = 60"]
+  E["Set temp offset = temp + 50"]
+  F["Rewrite LP5 values"]
+  G["Pressure = inlet pressure"]
+  H["Temp = inlet temperature - offset"]
+  I["MassFlow = current mass flow"]
+  J["BackPress = 0.5 * exhaust pressure"]
+  K["Reset LP5 flags"]
+
+  A --> B --> C
+  C -->|Yes| D --> F
+  C -->|No| E --> F
+  F --> G --> H --> I --> J --> K
+```
+
+Why it matters:
+
+- the first ERG check runs on the original executed LP set
+- then LP5 is rebuilt into a stronger corrective/bending/thrust-sensitive case
+- the second ERG check verifies whether the design still survives after that LP5 update
+
+So `UpdateLP5()` is the executed flow’s **second-pass stress/correction load-point generator**.
+
+### 7.9 `ErgResultsCheckExecuted(criteria, isLP5Update, maxLp)` in-depth flow and purpose
+
+This method is the **dispatcher** for executed ERG validation.
+
+It does not perform the actual check logic itself. It routes to the criterion-specific checker:
+
+- `BCD1120` -> `ErgResultsCheckBCD1120(isLP5Update, maxLp)`
+- `BCD1190` -> `ErgResultsCheckBCD1190(isLP5Update, maxLp)`
+- `Throttle` -> `ErgResultsCheckThrottle()`
+
+```mermaid
+flowchart TD
+  A["ErgResultsCheckExecuted(criteria, isLP5Update, maxLp)"]
+  B{"criteria"}
+  C["ERG_BCD1120"]
+  D["ERG_BCD1190"]
+  E["ERG_Throttle"]
+  F["Run criterion-specific check chain"]
+
+  A --> B
+  B -->|BCD1120| C --> F
+  B -->|BCD1190| D --> F
+  B -->|Throttle| E --> F
+```
+
+#### 7.9.1 `BCD1120` executed check chain
+
+`ErgResultsCheckBCD1120(maxLp)` runs a staged validation chain:
+
+1. exhaust volumetric-flow check
+2. nozzle-section check
+3. thrust-value check
+4. Delta-T / GBC / wheel-chamber / PT / bending check
+5. final `ErgResultsCheckBCD1120New(maxLp)` consolidation
+
+Important fallback behavior:
+
+- if nozzle optimization fails, it resets nearest-neighbor state and immediately hands off to `MainExecuted("BCD1190", maxLp)`
+
+It also contains load-point repair behavior:
+
+- if stage-pressure checks fail for MCR/high-BP points, it adjusts generated load points
+- rewrites DAT with `PrepareDatFileOnlyLPUpdate()`
+- reruns Turba
+- re-enters the BCD1120 check flow
+
+So BCD1120 is not a single yes/no check. It is a **repair-and-retry validation chain**.
+
+#### 7.9.2 `BCD1190` executed check chain
+
+`ErgResultsCheckBCD1190(maxLp)` follows a similar pattern, but with 1190-specific limits:
+
+1. exhaust check using delta-T-dependent exhaust curves
+2. nozzle-section optimization check
+3. thrust check
+4. Delta-T / GBC / wheel-chamber / bending check
+5. final `ErgResultsCheckBCD1190New(maxLp)` consolidation
+
+Important fallback behavior:
+
+- if exhaust or nozzle checks fail badly, it usually re-calls `MainExecuted("BCD1190", maxLp)` to try the next neighbor
+- once executed retries are exhausted, the higher-level `MainExecuted()` logic escalates to the custom path
+
+So BCD1190 is the **second executed rescue path** before custom flow is used.
+
+#### 7.9.3 `Throttle` executed check chain
+
+`ERGResultsCheckThrottle()` runs its own sequence:
+
+1. exhaust volumetric flow check
+2. Delta-T / GBC / wheel-chamber / PT / bending check
+3. thrust check
+4. load-point pressure/power correction check
+5. exhaust check
+
+If load-point pressure checks fail:
+
+- mass flow is increased for MCR points
+- BP can be reduced for the high-BP case
+- DAT is updated with `PrepareDATFileOnlyLPUpdate()`
+- Turba is re-launched
+- throttle ERG checks are re-run
+
+So throttle behaves like a smaller executed sub-flow with its own repair loop.
+
+### 7.10 `ValvePointOptimize(maxLp)` and final stabilization
+
+After both ERG passes complete, the executed flow enters the final executed stabilization block.
+
+Sequence:
+
+1. `ValvePointOptimize(maxLp)`
+2. `FillVari40()`
+3. Turba re-launch
+4. normalize output CON file to `TURBA.CON`
+5. push wheel chamber pressure back into Kreisl/DAT side
+6. `CheckPower(maxLp)`
+
+```mermaid
+flowchart TD
+  A["ValvePointOptimize(maxLp)"]
+  B["FillVari40()"]
+  C["Launch Turba again"]
+  D["Rename TURBATURBAE1.DAT.CON to TURBA.CON"]
+  E["FillWheelChamberPressure()"]
+  F["CheckPower(maxLp)"]
+  G["Executed flow stabilized / closed"]
+
+  A --> B --> C --> D --> E --> F --> G
+```
+
+Meaning:
+
+- valve-point optimization tries to improve convergence/performance before final closure
+- `Vari40` reconnects Turba and Kreisl state
+- the wheel chamber pressure is pushed back into the Kreisl-side files
+- `CheckPower()` is the final gate for executed success
+
+### 7.11 Additional load points in executed flow
+
+If the customer has more than two load points, the executed flow continues after power match into an additional-load-point merge path.
+
+That block:
+
+1. ensures `TURBA.CON` exists,
+2. refreshes Kreisl DAT,
+3. writes wheel chamber pressure back,
+4. loops over extra customer LPs,
+5. regenerates those LPs into `KREISL.DAT`,
+6. launches Kreisl again on the merged file.
+
+So the executed flow can end either as:
+
+- a normal executed single/base LP solution, or
+- an executed base solution followed by an additional-LP Kreisl expansion step.
+
 ---
 
 ## 8) Flow-wise content: Custom flow path
