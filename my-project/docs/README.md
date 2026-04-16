@@ -610,6 +610,689 @@ flowchart TD
   S --> T --> U --> V --> W --> X --> Y
 ```
 
+### 8.3 `GetNearestParams_Custom()` flow and purpose
+
+This method is the custom **reference-DAT selection and parameter-seeding** step used in `Main_Custom.cs`.
+
+What it does:
+
+1. runs a nearest-neighbor search for custom/nozzle candidates,
+2. updates HMBD custom parameters from the chosen nearest project,
+3. resolves and copies the matching reference DAT,
+4. loads that DAT into memory,
+5. scans the DAT and extracts the key geometry constants used later in the custom flow.
+
+The extracted values are:
+
+- `BEAUFSCHL`
+- `RADKAMMER`
+- `DRUCK`
+- `INNNEN`
+- `AUSGL`
+
+```mermaid
+flowchart TD
+  A["GetNearestParams_Custom()"]
+  B["PowerKNN(Nozzle)"]
+  C["MoveYAndSetParamsCustom()"]
+  D["SelectExecutedFlowPath(Nozzle)"]
+  E["GetFlowPathExecuted(Nozzle)"]
+  F["Copy matched reference DAT"]
+  G["LoadDatFile()"]
+  H["ScanDATFile()"]
+  I["Extract BEAUFSCHL, RADKAMMER, DRUCK, INNNEN, AUSGL"]
+  J["Custom flow now has nearest DAT path and seeded geometry params"]
+
+  A --> B --> C --> D --> E --> F --> G --> H --> I --> J
+```
+
+Implementation breakdown:
+
+- `PowerKNN("Nozzle")` filters the nearest-project search to nozzle-like candidates and stores the closest matches in `ListPower`.
+- `MoveYAndSetParamsCustom()` moves/selects the active custom neighbor row and updates HMBD custom parameters when a valid row is found.
+- `SelectExecutedFlowPath("Nozzle")` resolves the DAT path of the nearest matching project from the executed-project database.
+- `GetFlowPathExecuted("Nozzle")` performs the actual copy of that reference DAT into the working area.
+- `LoadDatFile()` reads `TURBATURBAE1.DAT.DAT` into `turbineDataModel.DAT_DATA`.
+- `ScanDATFile()` parses the copied DAT and fills turbine constants used later by the custom flow.
+
+This means `GetNearestParams_Custom()` is not doing optimization itself. It is preparing the **best starting reference DAT and initial custom geometry parameters** before later stages like custom DAT preparation, `BCD_UPDATE`, and PSO optimization begin.
+
+### 8.4 `CustomDATFileProcessor.PrepareDatFile(mxlp)` flow and purpose
+
+This method is the custom-flow **DAT file preparation step** called from `Main_Custom.cs`.
+
+Its job is to rebuild the working DAT file so Turba/custom-flow stages run on the correct load-point structure and updated initialization values.
+
+What it does:
+
+1. loads the active working DAT into memory,
+2. reads the first load point already present in the DAT,
+3. removes old LP rows / resets the LP area layout,
+4. inserts the regenerated custom load points up to `mxlp`,
+5. updates the ND/load-point count line,
+6. refreshes DAT initialization parameters except LP data,
+7. inserts the swallow load point used later by the run.
+
+```mermaid
+flowchart TD
+  A["PrepareDatFile(mxlp)"]
+  B["LoadDatFile()"]
+  C["LoadLP1FromDat()"]
+  D["DeleteRowAfterFirstLoadPoint()"]
+  E["InsertDataLineUnderFirstLPFixed()"]
+  F["DeleteLoadPoints()"]
+  G["InsertLoadPointsWithExactFormattingUsingMid(mxlp)"]
+  H["Compute totalLps = (mxlp >= 1) ? (mxlp - 1) : 0"]
+  I["InsertDataLineUnderND(totalLps)"]
+  J["DatFileInitParamsExceptLP()"]
+  K["InsertSwallowLoadPoint()"]
+  L["Custom DAT ready for next custom-flow stage"]
+
+  A --> B --> C --> D --> E --> F --> G --> H --> I --> J --> K --> L
+```
+
+Implementation breakdown:
+
+- `LoadDatFile()` reads `TURBATURBAE1.DAT.DAT` into `turbineDataModel.DAT_DATA`.
+- `LoadLP1FromDat()` captures the original first load-point structure so the regenerated DAT keeps the expected LP1 baseline.
+- `DeleteRowAfterFirstLoadPoint()` and `InsertDataLineUnderFirstLPFixed()` normalize the DAT block immediately under LP1 before bulk LP insertion.
+- `DeleteLoadPoints()` clears previously existing load-point entries from the working DAT.
+- `InsertLoadPointsWithExactFormattingUsingMid(mxlp)` writes the regenerated custom LP rows with the exact DAT formatting expected by downstream tools.
+- `InsertDataLineUnderND(totalLps)` updates the ND section with the effective number of generated load points.
+- `DatFileInitParamsExceptLP()` refreshes non-load-point initialization / machine parameters after the LP rewrite.
+- `InsertSwallowLoadPoint()` appends the swallow operating point needed for later custom processing.
+
+So `PrepareDatFile(mxlp)` is not selecting projects or optimizing anything by itself. It is the **DAT reconstruction step** that converts the chosen custom inputs and generated LPs into the final runtime DAT structure used by the next stages.
+
+### 8.5 `customSaxaSaxi.BCD_UPDATE(mxlp)` flow and purpose
+
+This method is the custom-flow **BCD rewrite step** used after DAT preparation.
+
+Its role is simple but important: it loads the current DAT, updates the BCD-related value in the DAT based on the pre-feasibility decision, and writes the modified DAT back to disk.
+
+At the current implementation level, the `mxlp` argument is passed in from `Main_Custom.cs`, but the actual `BCD_UPDATE()` method does not use it internally.
+
+```mermaid
+flowchart TD
+  A["BCD_UPDATE(mxlp)"]
+  B["LoadDatFile()"]
+  C["BCD_Change()"]
+  D{"preFeasibilityDataModel.Decision == TRUE?"}
+  E["Replace 0.000 0.000 with 0.000 1124.000"]
+  F["Replace 0.000 0.000 with 0.000 1198.000"]
+  G["WriteDatFile()"]
+  H["Updated DAT saved for next custom-flow stage"]
+
+  A --> B --> C --> D
+  D -->|Yes| E --> G
+  D -->|No| F --> G
+  G --> H
+```
+
+Implementation breakdown:
+
+- `LoadDatFile()` reloads the current working DAT into memory.
+- `BCD_Change()` scans for the `!     ABSTAND AXIALLAGER` section and checks the line immediately below it.
+- If the next line starts with `0.000     0.000`, the code rewrites that line using the pre-feasibility result:
+  - decision `TRUE` -> set BCD to `1124.000`
+  - otherwise -> set BCD to `1198.000`
+- `WriteDatFile()` saves the modified DAT back to `TURBATURBAE1.DAT.DAT`.
+
+So `BCD_UPDATE(mxlp)` is not a full optimization stage by itself. It is a **targeted DAT parameter patch** that converts the custom-flow pre-feasibility decision into the correct BCD setting before downstream checks and optimizers run.
+
+### 8.6 `pSOFlowPathOptimizerNozzle.InvokeTurbineDesigner()` in-depth flow and purpose
+
+This is the **main custom nozzle optimization function** in the custom flow.
+
+In simple terms, it tries many combinations of five DAT parameters, runs Turba for each combination, rejects combinations that violate engineering rules, keeps the best feasible one, and then does a final refinement pass.
+
+The five optimized parameters are:
+
+- `B` = `BEAUFSCHL` (admission factor)
+- `R` = `RADKAMMER` (wheel chamber pressure)
+- `D` = `DRUCKZIFFERN` (stage-related setting, stored as negative in DAT)
+- `I` = `INNENDURCHMESSER` (shaft diameter)
+- `A` = `AUSGLEICHSKOLBEN` (balance piston diameter)
+
+#### 8.6.1 Easy overall picture
+
+```mermaid
+flowchart TD
+  A["InvokeTurbineDesigner()"]
+  B{"Use Ollama-guided mode?"}
+  C["InvokeOllamaGuidedOptimizer()"]
+  D["Load relationship table and start PSO loop"]
+  E["Initialize particles and parameter bounds"]
+  F["For each iteration: evaluate all particles"]
+  G["Update particles using PSO + relationship guidance"]
+  H{"Good feasible global best found?"}
+  I["FinalEvaluation()"]
+  J["Run best solution again"]
+  K["5-parameter manual walk / local refinement"]
+  L["Keep best feasible parameter set"]
+  M["Optimization output ready for next custom-flow stage"]
+
+  A --> B
+  B -->|Yes| C --> M
+  B -->|No| D --> E --> F --> G --> H
+  H -->|Continue| F
+  H -->|Stop / converged| I
+  I --> J --> K --> L --> M
+```
+
+#### 8.6.2 What this function is doing, step by step
+
+1. **Choose optimization mode**
+   - `InvokeTurbineDesigner()` first checks `AppSettings:UseOllamaGuidedNozzle`.
+   - If it is enabled, the function switches to `InvokeOllamaGuidedOptimizer()`.
+   - Otherwise it runs the default **relationship-aware PSO** path.
+
+2. **Initialize optimization search space**
+   - `InitializeParameterBounds()` creates min/max/step values for `B, R, D, I, A`.
+   - Bounds depend partly on process inputs like inlet pressure and backpressure.
+   - Example:
+     - `B` gets an admission-factor range,
+     - `R` gets a wheel-chamber-pressure range,
+     - `D` gets a stage-related range,
+     - `I` and `A` get shaft/piston diameter ranges.
+
+3. **Create initial particles**
+   - `InitializeParticles()` creates the PSO population.
+   - Each particle is one candidate parameter set: `(B, R, D, I, A)`.
+   - `InitializeParticleWithRelationshipGuidance()` does not randomize blindly:
+     - it starts from conservative values,
+     - it biases values using engineering relationships,
+     - for example smaller shaft + larger piston is preferred for thrust balance.
+
+4. **Run the PSO loop**
+   - `PSOLoop()` currently runs a fixed number of iterations.
+   - In each iteration:
+     - `EvaluateAndUpdateParticles()`
+     - `UpdateParticlesWithRelationships()`
+   - Then it checks whether a strong feasible global best has already been found.
+
+#### 8.6.3 Detailed particle evaluation flow
+
+This is the core of the optimizer because every particle is tested by actually updating the DAT and launching Turba.
+
+```mermaid
+flowchart TD
+  A["Evaluate particle (B,R,D,I,A)"]
+  B{"Blacklisted combination?"}
+  C["Reset particle to safe guided values"]
+  D["RunBlackboxApplication(B,R,D,I,A)"]
+  E["UpdateDATSoftChecks() writes B,R,D,I,A into DAT"]
+  F["LaunchTurba()"]
+  G["Read outputs: efficiency, power, HOEHE, DELTA_T, wheel temp, GBC length, thrust, PSI, LANG"]
+  H["GetPenaltyScore()"]
+  I{"Penalty > 0?"}
+  J["ApplyConstraintSpecificCorrection()"]
+  K{"Parameters changed?"}
+  L["Re-run DAT update + Turba + penalty"]
+  M{"Still penalty > 0?"}
+  N["Reject particle"]
+  O["Accept particle as feasible"]
+  P["Update personal best"]
+  Q["Update global best if efficiency is better"]
+
+  A --> B
+  B -->|Yes| C --> D
+  B -->|No| D
+  D --> E --> F --> G --> H --> I
+  I -->|No| O --> P --> Q
+  I -->|Yes| J --> K
+  K -->|No| M
+  K -->|Yes| L --> M
+  M -->|Yes| N
+  M -->|No| O
+```
+
+#### 8.6.4 What `RunBlackboxApplication()` means
+
+This is the real “test a candidate” step:
+
+1. `UpdateDATSoftChecks(B,R,D,I,A)` writes the five candidate values into the nozzle DAT file.
+2. `LaunchTurba()` runs Turba on that updated DAT.
+3. The code then reads the resulting outputs from `turbaOutputModel`.
+
+So the optimizer is **not using a formula-only estimate**. It is using the actual Turba run as the black-box evaluator.
+
+#### 8.6.5 How penalty-based feasibility works
+
+After each Turba run, `GetPenaltyScore()` is called.
+
+- If penalty is `0`, the candidate is treated as **feasible**.
+- If penalty is greater than `0`, the candidate violates one or more engineering constraints.
+
+The checks include output conditions such as:
+
+- nozzle height (`HOEHE`)
+- nozzle area (`FMIN1`)
+- wheel chamber temperature
+- `DELTA_T`
+- `GBC_Length`
+- `PSI`
+- `LANG`
+- thrust per load point
+
+The exact limits depend on whether the pre-feasibility branch implies **BCD1120** or **BCD1190**.
+
+#### 8.6.6 How correction works when a particle fails
+
+If a particle is infeasible, the optimizer does **targeted correction** instead of discarding it immediately.
+
+`ApplyConstraintSpecificCorrection()`:
+
+1. detects whether the active check type is `1120` or `1190`,
+2. reads current Turba outputs,
+3. changes only the parameters that are most relevant to the failed constraint,
+4. snaps the result back to valid step sizes.
+
+Examples of correction logic:
+
+- if nozzle area is too high -> reduce `B`
+- if wheel chamber temperature is too high -> reduce `R`
+- if `DELTA_T` is too high -> reduce `R`
+- if GBC length is too large -> adjust `D`
+- if PSI fails -> adjust stages (`D`)
+- if thrust fails -> adjust shaft diameter `I`
+
+After correction, the optimizer re-runs Turba and re-checks the penalty.
+
+If the particle is still infeasible, it is rejected.
+
+#### 8.6.7 How PSO updates the particles
+
+After evaluation, `UpdateParticlesWithRelationships()` moves particles for the next iteration.
+
+This stage combines:
+
+- normal PSO behavior:
+  - current position
+  - velocity
+  - personal best
+  - global best
+- engineering relationship guidance:
+  - shaft diameter vs thrust
+  - piston diameter vs thrust
+  - admission factor vs nozzle area
+  - pressure vs wheel chamber temperature
+
+So this optimizer is not a plain random PSO. It is a **relationship-aware PSO** that tries to move particles in directions that make engineering sense.
+
+#### 8.6.8 What happens if no good solution is found in an iteration
+
+If no feasible particles are found:
+
+- `ApplyEmergencyDiversification()` resets particles into broader but still sensible ranges.
+
+There is also extra diversification support for poor-performing particles through:
+
+- `AnalyzeRelationshipPerformance()`
+- `ApplyRelationshipGuidedDiversification()`
+
+These are meant to push the search away from bad regions and back toward more promising combinations.
+
+#### 8.6.9 Final evaluation and manual walk
+
+After the PSO loop finishes, the code does **more than just accept the best PSO particle**.
+
+`FinalEvaluation()`:
+
+1. runs the current global best again,
+2. checks final penalty and efficiency,
+3. logs the best `B, R, D, I, A`,
+4. performs a **manual walk** across each of the five parameters one by one,
+5. keeps any improved feasible result.
+
+That manual walk is important because:
+
+- PSO finds a strong candidate region,
+- the final sweep then tries to squeeze out a little more efficiency,
+- but only while keeping penalty at zero.
+
+So the real flow is:
+
+- broad guided search first,
+- exact local improvement second.
+
+#### 8.6.10 Final refinement flow
+
+```mermaid
+flowchart TD
+  A["FinalEvaluation()"]
+  B{"Global best feasible exists?"}
+  C["Run best B,R,D,I,A again"]
+  D["Check final penalty and efficiency"]
+  E["Loop over each parameter: B, R, D, I, A"]
+  F["Try next stepped value"]
+  G["Run Turba again"]
+  H{"Penalty = 0 and efficiency improved?"}
+  I["Keep improved parameter set"]
+  J["Stop scan for that direction / parameter"]
+  K["Write final best result summary"]
+
+  A --> B
+  B -->|No| K
+  B -->|Yes| C --> D --> E --> F --> G --> H
+  H -->|Yes| I --> E
+  H -->|No| J --> E
+  E --> K
+```
+
+#### 8.6.11 Easy summary
+
+`InvokeTurbineDesigner()` is the main engine that:
+
+1. chooses a candidate nozzle DAT parameter set,
+2. writes those values into the DAT,
+3. launches Turba,
+4. checks whether the result is feasible,
+5. corrects bad candidates,
+6. keeps the best feasible solution,
+7. finally refines that solution again before handing it back to the custom flow.
+
+So in one sentence: this function is the **main black-box optimizer that searches for the best feasible custom nozzle design by repeatedly editing the DAT, running Turba, enforcing engineering constraints, and refining the best result**.
+
+### 8.7 `cuPunConvertor.TurnaConvert(mxlp)` in-depth flow and purpose
+
+This method is the **file-conversion and DAT re-preparation bridge** used after the custom nozzle optimizer finishes.
+
+In simple terms, it takes the latest Turba-generated `.PUN` result, converts it back into the working `.DAT` form, inserts the custom varicode lines needed for the next phase, removes the swallow LP block, and fixes the load-point count again.
+
+So this method is not doing optimization. It is turning the optimizer output into the **next valid working DAT** for downstream custom checks and final runs.
+
+#### 8.7.1 Easy overall picture
+
+```mermaid
+flowchart TD
+  A["TurnaConvert(mxlp)"]
+  B["Rename current TURBATURBAE1.DAT.DAT to TURBA_BASE.DAT"]
+  C["Convert latest Turba PUN into working DAT file"]
+  D["Load converted DAT into memory"]
+  E["Insert VARICODE 52"]
+  F["Insert VARICODE 54"]
+  G["Remove swallow load-point block"]
+  H["Write cleaned DAT back to disk"]
+  I["Recompute total LP count from mxlp"]
+  J["InsertDataLineUnderND(totalLps)"]
+  K["Converted DAT ready for next custom-flow stage"]
+
+  A --> B --> C --> D --> E --> F --> G --> H --> I --> J --> K
+```
+
+#### 8.7.2 What this method is doing, step by step
+
+1. **Preserve the current DAT as a base copy**
+   - `RenameOLDDat()` renames:
+     - `TURBATURBAE1.DAT.DAT` -> `TURBA_BASE.DAT`
+   - This keeps the previous working DAT as a base/reference before the `.PUN` output is turned into a new DAT.
+
+2. **Convert Turba output into a DAT again**
+   - `ConvertPUN()` performs a two-step rename:
+     - `TURBAE1.PUN` -> `TURBAE1.DAT`
+     - `TURBAE1.DAT` -> `TURBATURBAE1.DAT.DAT`
+   - In other words, the latest Turba result becomes the new working DAT file.
+
+3. **Load the converted DAT**
+   - `LoadDatFile()` reads the converted `TURBATURBAE1.DAT.DAT` into `turbineDataModel.DAT_DATA`.
+   - From this point on, edits happen in memory first.
+
+4. **Insert required custom varicodes**
+   - `InsertVARICODE52()` finds the `49.000` varicode line and inserts a new `52.000` line after it.
+   - `InsertVARICODE54()` then finds the new `52.000` line and inserts a `54.000 13200.000` style line after it.
+   - These insertions prepare the converted DAT for the next custom-flow behavior expected by the codebase.
+
+5. **Remove the swallow load-point block**
+   - `RemoveSwallow(mxlp)` removes the LP block starting from:
+     - `!LP<mxlp>` if `mxlp > 0`
+     - otherwise `!LP11`
+   - The method clears four lines starting at that LP marker, then compacts the list by removing empty lines.
+   - The purpose is to strip out the swallow LP block that should not remain in the converted DAT for the next stage.
+
+6. **Write the edited DAT back**
+   - `WriteDatFile()` writes `turbineDataModel.DAT_DATA` back to disk.
+
+7. **Fix the ND / load-point count**
+   - `totalLps = (mxlp >= 1) ? (mxlp - 1) : 0`
+   - `InsertDataLineUnderND(totalLps)` updates the ND section so the DAT metadata matches the LP structure left after swallow removal.
+
+#### 8.7.3 Detailed conversion flow
+
+```mermaid
+flowchart TD
+  A["Start TurnaConvert(mxlp)"]
+  B{"Working DAT exists?"}
+  C["Rename TURBATURBAE1.DAT.DAT to TURBA_BASE.DAT"]
+  D{"TURBAE1.PUN exists?"}
+  E["Rename TURBAE1.PUN to TURBAE1.DAT"]
+  F["Rename TURBAE1.DAT to TURBATURBAE1.DAT.DAT"]
+  G["LoadDatFile()"]
+  H["InsertVARICODE52()"]
+  I["InsertVARICODE54()"]
+  J["RemoveSwallow(mxlp)"]
+  K["WriteDatFile()"]
+  L["InsertDataLineUnderND(totalLps)"]
+  M["Final converted DAT ready"]
+
+  A --> B
+  B -->|Yes| C --> D
+  B -->|No| D
+  D -->|Yes| E --> F --> G --> H --> I --> J --> K --> L --> M
+  D -->|No| M
+```
+
+#### 8.7.4 How `RemoveSwallow(mxlp)` decides what to delete
+
+This part is important because `mxlp` directly affects the cleanup.
+
+- If `mxlp > 0`, the method looks for:
+  - `!LP<mxlp>`
+- Otherwise it defaults to:
+  - `!LP11`
+
+Once it finds that LP marker, it removes that LP block by blanking four lines and then filtering empty lines out of the DAT list.
+
+So the meaning is:
+
+- use the actual last custom LP when known,
+- otherwise assume the swallow block starts at LP11.
+
+#### 8.7.5 Why varicode insertion happens here
+
+The conversion step is not just a file rename.
+
+The code also adds:
+
+- `VARICODE 52`
+- `VARICODE 54`
+
+This suggests the converted DAT must carry extra control/configuration entries before the next Turba/custom validation phase runs.
+
+So `TurnaConvert()` is both:
+
+- a **file conversion** step, and
+- a **DAT patching** step.
+
+#### 8.7.6 Why the ND line is fixed again at the end
+
+After swallow removal, the DAT may no longer have the same effective number of active LPs.
+
+That is why the method ends with:
+
+- recomputing `totalLps`
+- calling `InsertDataLineUnderND(totalLps)`
+
+Without this, the LP count metadata in the DAT could disagree with the actual LP blocks present in the file.
+
+#### 8.7.7 Easy summary
+
+`TurnaConvert(mxlp)` is the method that:
+
+1. preserves the old DAT,
+2. converts the latest Turba `.PUN` output into the new working DAT,
+3. injects custom varicode entries,
+4. removes the swallow LP block,
+5. rewrites the DAT,
+6. fixes the LP count metadata.
+
+So in one sentence: this function is the **post-optimizer DAT conversion step that transforms Turba output back into a clean custom-runtime DAT for the next engineering checks and launches**.
+
+### 8.8 `cuPunConvertor.UpdatePunConvertor()` in-depth flow and purpose
+
+This method is the **ERG-to-DAT stage update step** that runs after `TurnaConvert(mxlp)`.
+
+In simple terms, it reads stage-wise deformation data from the Turba `.ERG` file, rounds those values upward to the next `0.05`, and writes them back into the current working DAT stage table.
+
+So this is not a general DAT rebuild. It is a **targeted stage-parameter synchronization step** that transfers important stage results from ERG into DAT.
+
+#### 8.8.1 Easy overall picture
+
+```mermaid
+flowchart TD
+  A["UpdatePunConvertor()"]
+  B["Open TURBATURBAE1.DAT.ERG"]
+  C["Find ERG section: STUFE RSPALT RDZENT RDEHN GEF"]
+  D["Read stage rows marked with *"]
+  E["Take stage number and RDEHN"]
+  F["Round RDEHN upward with Next005()"]
+  G["UpdateValueinDat(stage, rounded RDEHN)"]
+  H["Open current TURBATURBAE1.DAT.DAT"]
+  I["Find !ST section before !LP2"]
+  J["Match row by stage number and type = 2"]
+  K["Write rounded value into field 8"]
+  L["Save DAT"]
+
+  A --> B --> C --> D --> E --> F --> G --> H --> I --> J --> K --> L
+```
+
+#### 8.8.2 What this method is doing, step by step
+
+1. **Open the ERG file**
+   - The method reads:
+     - `C:\testDir\TURBATURBAE1.DAT.ERG`
+
+2. **Find the stage-result table**
+   - It looks for the header:
+     - `STUFE  RSPALT  RDZENT   RDEHN  GEF`
+   - That is the ERG section containing stage-wise data.
+
+3. **Skip down into the actual rows**
+   - After finding the header, the method moves down a few lines.
+   - Then it loops row by row until it reaches an empty line, form-feed marker, or `DATE`.
+
+4. **Process only marked stage rows**
+   - Only lines containing `*` are processed.
+   - For each such row, it extracts:
+     - stage number from `Params[0]`
+     - `RDEHN` from `Params[3]`
+
+5. **Round `RDEHN` upward**
+   - `Next005()` converts the ERG value to the **next higher multiple of `0.05`**.
+   - If the value is already exactly on a `0.05` step, it still adds one more `0.05`.
+
+6. **Write the updated value into the DAT**
+   - `UpdateValueinDat(find, replace)` opens:
+     - `C:\testDir\TURBATURBAE1.DAT.DAT`
+   - It searches the stage table under `!ST`.
+   - For each stage row before `!LP2`, it splits the row by `|`.
+   - It updates the row where:
+     - field `0` = matching stage number
+     - field `1` = `2`
+   - Then it replaces:
+     - `fields[8] = replace.ToString("0.00")`
+
+7. **Save the DAT**
+   - After the matching stage row is modified, the DAT file is written back to disk.
+
+#### 8.8.3 Detailed update flow
+
+```mermaid
+flowchart TD
+  A["Start UpdatePunConvertor()"]
+  B["Read all lines from TURBATURBAE1.DAT.ERG"]
+  C{"Found stage table header?"}
+  D["Move 3 lines down"]
+  E["Read next ERG row"]
+  F{"Stop marker? empty / form-feed / DATE"}
+  G{"Row contains * ?"}
+  H["Split row into Params[]"]
+  I["stage = Params[0]"]
+  J["rdehn = Params[3]"]
+  K["nRdehn = Next005(rdehn)"]
+  L["UpdateValueinDat(stage, nRdehn)"]
+  M["Read DAT and search !ST block"]
+  N{"Matching stage and type=2 found before !LP2?"}
+  O["Set fields[8] = nRdehn"]
+  P["Write DAT back"]
+  Q["Continue with next ERG stage row"]
+  R["Finish"]
+
+  A --> B --> C
+  C -->|Yes| D --> E --> F
+  C -->|No| R
+  F -->|Yes| R
+  F -->|No| G
+  G -->|No| Q --> E
+  G -->|Yes| H --> I --> J --> K --> L --> M --> N
+  N -->|Yes| O --> P --> Q
+  N -->|No| Q
+```
+
+#### 8.8.4 What `Next005()` is doing
+
+This helper is small but very important.
+
+Its rule is:
+
+- take a numeric value,
+- move it to the **next higher `0.05` step**,
+- even if it is already exactly on a step, move one more step higher.
+
+Examples:
+
+- `1.02` -> `1.05`
+- `1.05` -> `1.10`
+- `1.11` -> `1.15`
+
+So the method is intentionally **conservative upward rounding**, not simple normal rounding.
+
+#### 8.8.5 Why the DAT update is limited to the `!ST` block before `!LP2`
+
+`UpdateValueinDat()` only edits rows:
+
+- inside the stage section starting at `!ST`
+- before the next `!LP2`
+- where the second field equals `2`
+
+This means the method is carefully targeting one particular stage-data region in the DAT, instead of globally replacing numbers everywhere.
+
+That is important because the same stage number might appear in other parts of the file, but this method only wants the **main stage table entries** relevant for this conversion step.
+
+#### 8.8.6 Why this step matters in the custom flow
+
+After Turba has run, the ERG file contains updated stage information that the DAT does not yet fully reflect.
+
+`UpdatePunConvertor()` closes that gap by:
+
+- reading stage-wise ERG output,
+- converting the deformation value into the format/range expected by DAT,
+- syncing it back into the DAT stage table.
+
+So this is effectively a **feedback step from ERG to DAT**.
+
+#### 8.8.7 Easy summary
+
+`UpdatePunConvertor()` is the method that:
+
+1. reads stage `RDEHN` values from the ERG,
+2. rounds them upward to the next `0.05`,
+3. finds the matching stage rows in the DAT,
+4. writes the rounded values back into the DAT,
+5. saves the file again.
+
+So in one sentence: this function is the **stage-data feedback updater that pushes ERG deformation results back into the working DAT before the next custom-flow steps continue**.
+
 ---
 
 ## 9) Flow-wise content: Additional load points path
