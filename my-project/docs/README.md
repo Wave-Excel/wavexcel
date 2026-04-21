@@ -1637,6 +1637,22 @@ This path appears when the main flow has **more than one customer load point** t
 
 Implementation lives mainly in `AdditionalLoadPoints.cs` (`CustomLoadPointHandler`), especially **`cxLP_mainKreisl(customerLPList)`**.
 
+### 9.0.1 Legend (terms used in charts)
+
+- **LP indexing**
+  - **LP1** in this chapter refers to the *first customer load point row the handler uses* (in code many accesses use `CustomerLoadPoints[1]` as the base row).
+  - “extra LPs” means subsequent customer points (`i = 2..` in the spreadsheet sense), merged via `fillAGainDat` / `fillLPAgain`.
+- **Unknown-dimension codes**
+  - **`Pr`**: `SteamPressure` is unknown / zero
+  - **`T`**: `SteamTemp` is unknown / zero
+  - **`M`**: `SteamMass` is unknown / zero
+  - **`P`**: `PowerGeneration` is unknown / zero
+  - **`E`**: `ExhaustPressure` is unknown / zero
+- **Key artifacts**
+  - **`KREISL.DAT`** (written repeatedly) and **`KREISL.ERG`** (read to back-fill)
+  - **`TURBATURBAE1.DAT.ERG`** (read during desuperheater update)
+  - **`MainTemp`**: an in-memory accumulator that often does `MainTemp += File.ReadAllText("C:\\testDir\\KREISL.DAT")` after each LP write.
+
 ### 9.1 High-level flow (`cxLP_mainKreisl`)
 
 ```mermaid
@@ -1703,6 +1719,95 @@ Open-cycle mass-flow tie-up (when neither deaerator nor PST): if mass is unknown
 
 Before the ERG fill loop, **`fillLPINDat()`** writes customer LP1 boundary conditions into **`KREISL.DAT`** via `KreislDATHandler` (pressure, temperature, mass flow, power, exhaust pressure, closed-cycle makeup/condensate/PST/PRV branches, dump condenser capacity paths). It accumulates working text in **`MainTemp`** (often by appending the current `KREISL.DAT` file after edits).
 
+#### 9.3.1 `fillLPINDat()` mini spec (inputs/outputs)
+
+- **Reads**
+  - `AdditionalLoadPoint.GetInstance().CustomerLoadPoints[1]` fields (pressure/temp/mass/power/exhaust pressure/exhaust mass/PST/closed-cycle fields)
+  - `turbineDataModel` flags: `DeaeratorOutletTemp`, `PST`, `DumpCondensor`, `IsPRVTemplate`, `ExhaustPressure`
+- **Writes**
+  - `StartKreisl.filePath` (the Kreisl DAT) via `KreislDATHandler.*`
+  - appends the final file text into `MainTemp`
+- **Key behavior**
+  - If **closed-cycle** (`DeaeratorOutletTemp > 0`) it writes makeup/condensate/process steam temp (PST) and optionally desuperheater pressure.
+  - If **PST-only** (`PST > 0`) it writes process steam temp and optional desuperheater pressure.
+  - If **open-cycle** (no deaerator and PST=0) it applies the `0.055` mass tie-up between inlet and exhaust mass flows.
+
+#### 9.3.2 Detailed branch chart for `fillLPINDat()`
+
+```mermaid
+flowchart TD
+  A["fillLPINDat()"]
+  B["Load input = CustomerLoadPoints[1]"]
+  C{"Closed cycle? (DeaeratorOutletTemp > 0)"}
+  C1["Write makeup/condensate fields"]
+  C2["Set model PST = tsat(exhaustP)+5 if PST==0"]
+  C3["Write process steam temperature using PST"]
+  C4{"IsPRVTemplate?"}
+  C5["fillPsatvont_t using DeaeratorOutletTemp"]
+  C6{"SteamPressure > 0?"}
+  C7["FillPressureDesh = 1.2*SteamPressure"]
+
+  D{"PST-only? (PST > 0)"}
+  D1["Write process steam temperature using model PST"]
+  D2{"SteamPressure > 0?"}
+  D3["FillPressureDesh = 1.2*SteamPressure"]
+
+  E{"Open cycle (no deaerator, PST==0)?"}
+  E1{"SteamMass==0 and ExhaustMassFlow>0?"}
+  E2["SteamMass = 0.055 + ExhaustMassFlow"]
+  E3{"SteamMass>0 and ExhaustMassFlow==0?"}
+  E4["ExhaustMassFlow = SteamMass - 0.055"]
+
+  U{"Which field is zero? (Pr/T/M/P/else)"}
+  Pr["Pr unknown: FillMassFlow; inletP sweep 0.000 -> 42.981; set exP + inletT + power(+25)"]
+  T["T unknown: FillMassFlow; set inletP; inletT sweep 0.000 -> 440; set exP + power(+25)"]
+  M["M unknown: Mass sweep 0.000 -> (exMass+10); set inletP + inletT + exP; power(+25) OR ProcessMassFlow if closed/PST"]
+  P["P unknown: set inletP + inletT + exP + mass; then dump-cond branches may force power=0 / mass=0"]
+  OK["No main unknown: uses given values (still may do dump-cond/PST writes above)"]
+
+  DC{"DumpCondensor enabled?"}
+  DC1{"Capacity > 0?"}
+  DC2["fillCapacity; set power=0 and/or mass=0; ProcessMassFlow(exhaust mass); mass step uses (10+exMass)"]
+  DC3{"Capacity==0 and checkIfDumpcondensorON==true?"}
+  DC4["ProcessMassFlow(exhaust mass)"]
+  DC5["TurnOffCondensor (multiple calls)"]
+
+  Z["MainTemp += read KREISL.DAT"]
+
+  A --> B --> C
+  C -->|Yes| C1 --> C2 --> C3 --> C4
+  C4 -->|Yes| C5 --> C6
+  C4 -->|No| C6
+  C6 -->|Yes| C7 --> E
+  C6 -->|No| E
+
+  C -->|No| D
+  D -->|Yes| D1 --> D2
+  D2 -->|Yes| D3 --> E
+  D2 -->|No| E
+  D -->|No| E
+
+  E -->|Yes| E1
+  E1 -->|Yes| E2 --> U
+  E1 -->|No| E3
+  E3 -->|Yes| E4 --> U
+  E3 -->|No| U
+  E -->|No| U
+
+  U -->|SteamPressure==0| Pr --> DC
+  U -->|SteamTemp==0| T --> DC
+  U -->|SteamMass==0| M --> DC
+  U -->|PowerGeneration==0| P --> DC
+  U -->|else| OK --> DC
+
+  DC -->|No| Z
+  DC -->|Yes| DC1
+  DC1 -->|Yes| DC2 --> Z
+  DC1 -->|No| DC3
+  DC3 -->|Yes| DC4 --> Z
+  DC3 -->|No| DC5 --> Z
+```
+
 ### 9.4 ERG back-fill for all customer LPs
 
 After LP1 is in the DAT, a loop over **`CustomerLoadPoints[1..]`** fills any zero from **`KREISL.ERG`** using `KreislERGHandlerService` (`ExtractPressure`, `ExtractTemperature`, `ExtractMassFlow`, `ExtractBackPressure`, `ExtractVolFlowForLoadPoint`). Then **`SortCustomerLoadPointsByVol()`** reorders LPs by volumetric flow.
@@ -1725,6 +1830,47 @@ If **`DeaeratorOutletTemp > 0` or `PST > 0`**, **`UpdateDesupratorWithTurba(...)
 ### 9.7 LP validation helper (`cxLP_validateLPs`)
 
 Used to classify customer input before heavy work: counts known fields per LP (must be more than three knowns per LP in the current rule), and returns **`Power`**, **`Flow`**, **`Hybrid`**, or **`Error`** depending on whether all LPs have power, all have mass flow, or a mix.
+
+#### 9.7.1 Detailed decision chart for `cxLP_validateLPs()`
+
+In code, “known” increments for: `SteamPressure`, `SteamTemp`, `SteamMass`, `ExhaustPressure`, `PowerGeneration`, `ExhaustMassFlow`, `PartLoad`, `VolFlow` (each positive adds 1). If `knownValuesCount <= 3` for any LP, it logs and terminates.
+
+```mermaid
+flowchart TD
+  A["cxLP_validateLPs()"]
+  B["isAll_LPhasPower=true; isAll_LPhasFlow=true; isLPValid=false"]
+  C["For i=1..cxLP_RngStop"]
+  D["knownValuesCount=0; isLPValid=true"]
+  E{"PowerGeneration <= 0?"}
+  F["isAll_LPhasPower=false"]
+  G{"SteamMass <= 0?"}
+  H["isAll_LPhasFlow=false"]
+  I["knownValuesCount += each positive of P,T,M,ExP,Power,ExMass,PartLoad,VolFlow"]
+  J{"knownValuesCount <= 3?"}
+  K["isLPValid=false; Logger invalid; TerminateIgniteX"]
+  R{"isAll_LPhasPower?"}
+  S["return Power"]
+  T{"isAll_LPhasFlow?"}
+  U["return Flow"]
+  V{"isLPValid?"}
+  W["return Hybrid"]
+  X["return Error"]
+
+  A --> B --> C --> D --> E
+  E -->|Yes| F --> G
+  E -->|No| G
+  G -->|Yes| H --> I --> J
+  G -->|No| I --> J
+  J -->|Yes| K --> C
+  J -->|No| C
+  C --> R
+  R -->|Yes| S
+  R -->|No| T
+  T -->|Yes| U
+  T -->|No| V
+  V -->|Yes| W
+  V -->|No| X
+```
 
 ### 9.8 Inner flow: `fillLPAgain(i, unk, count, initList)`
 
@@ -1863,19 +2009,43 @@ Parses **`TURBATURBAE1.DAT.ERG`** blocks (`DRUECKE`, `TEMPERATUREN`, `ENTHALPIEN
 ```mermaid
 flowchart TD
   A["UpdateDesupratorWithTurba(loadPoint)"]
-  B["Parse Turba ERG tables into arrays"]
-  C["For each LP column up to loadPoint"]
-  D{"Exhaust temp above PST for that LP?"}
-  E["Closed + dump: UpdateDesupratorClosedPRVDumpCondensor"]
-  F["Closed no dump: UpdateDesupratorClosedPRV"]
-  G["Open: UpdateDesupratorFirst + Second"]
-  H["Customer PST == 0 then clear model PST"]
+  B["Read TURBATURBAE1.DAT.ERG lines"]
+  C["Parse blocks: pressures, temperatures, enthalpies, mass flows"]
+  D["Build 3 x loadPoint matrices (inlet/wheel/exhaust)"]
+  E["LP1: exhaustTemp = temps[2,0]"]
+  F["Set model PST = tsat(CustomerLP1.ExhaustPressure)+5 if PST==0"]
+  G{"exhaustTemp > model PST?"}
+  H{"DeaeratorOutletTemp > 0?"}
+  I{"DumpCondensor?"}
+  J["UpdateDesupratorClosedPRVDumpCondensor(..., count=1)"]
+  K["UpdateDesupratorClosedPRV(..., count=1)"]
+  L["UpdateDesupratorFirst + Second(..., count=1)"]
+  M{"CustomerLP1.PST == 0?"}
+  N["model PST = 0"]
+  O{"Any extra customer LPs? (loadPoint - 10 >= 1)"}
+  P["Loop columns i=10..(loadPoint-1), count=2.."]
+  Q["exhaustTemp = temps[2,i]; set PST using CustomerLoadPoints[count].ExhaustPressure if PST==0"]
+  R{"exhaustTemp > model PST?"}
+  S["Apply same Closed/ Dump / Open updates using count"]
+  T{"CustomerLoadPoints[count].PST == 0?"}
+  U["model PST = 0"]
+  Z["Done"]
 
-  A --> B --> C --> D
-  D -->|Yes + deaerator + dump| E
-  D -->|Yes + deaerator + no dump| F
-  D -->|Yes + open| G
-  D -->|No| H
+  A --> B --> C --> D --> E --> F --> G
+  G -->|No| M
+  G -->|Yes| H
+  H -->|Yes| I
+  I -->|Yes| J --> M
+  I -->|No| K --> M
+  H -->|No| L --> M
+  M -->|Yes| N --> O
+  M -->|No| O
+  O -->|No| Z
+  O -->|Yes| P --> Q --> R
+  R -->|No| T
+  R -->|Yes| S --> T
+  T -->|Yes| U --> P
+  T -->|No| P
 ```
 
 ---
