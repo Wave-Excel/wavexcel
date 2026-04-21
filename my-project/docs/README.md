@@ -1633,26 +1633,253 @@ So in one sentence: this function is the **stage-data feedback updater that push
 
 ## 9) Flow-wise content: Additional load points path
 
-This path appears in both executed and custom flows when:
+This path appears when the main flow has **more than one customer load point** to merge into Kreisl/Turba work (exact gate depends on caller: e.g. executed path checks `CustomerLoadPoints.Count > 2` in places; the idea is the same: **extra LPs beyond the base case**).
 
-- `AdditionalLoadPoint.GetInstance().CustomerLoadPoints.Count > 1`
+Implementation lives mainly in `AdditionalLoadPoints.cs` (`CustomLoadPointHandler`), especially **`cxLP_mainKreisl(customerLPList)`**.
 
-LP-wise sequence:
+### 9.1 High-level flow (`cxLP_mainKreisl`)
 
-1. ensure `TURBA.CON` exists (rename fallback if needed),
-2. refresh Kreisl DAT and push wheel chamber pressure,
-3. iterate customer load points from index 1 onward,
-4. for each LP, resolve unknown input dimension and fill LP template:
-   - `Pr` (pressure unknown),
-   - `T` (temperature unknown),
-   - `M` (mass flow unknown),
-   - `P` (power unknown),
-   - `E` (exhaust pressure unknown),
-5. append each generated LP DAT block into final `KREISL.DAT`,
-6. if deaerator/PST path is active, update desuperheater fields from Turba ERG,
-7. launch Kreisl on merged multi-LP DAT.
+```mermaid
+flowchart TD
+  A["cxLP_mainKreisl(customerLPList)"]
+  B["checkingPartLoadExist"]
+  C["Snapshot initList + lpNumberToIndexMap"]
+  D["DeleteCONFiles, fillCustomerLoadPointList"]
+  E["RefreshKreislDAT, set exhaust from LP1"]
+  F["cxLP_GetLPcount"]
+  G["fillLPINDat (write LP1 unknowns into KREISL.DAT)"]
+  H["Fill missing fields from KREISL.ERG for each LP"]
+  I["SortCustomerLoadPointsByVol"]
+  J["Closed-cycle extras: capacity dump LP, PST, extend range"]
+  K["fillLoadPointList + RefreshKreislDAT + FillInputDat"]
+  L["CorrectLP1unknowParams if single customer LP"]
+  M["HBD defaults + eff init + persist power"]
+  N["ReferenceDATSelector(cxLP_RngStop + 10)"]
+  O["cxLP_GenerateLoadPoints Recal + GenerateLoadPoints"]
+  P["prepareDATFile (standard DAT processor)"]
+  Q["LaunchTurba"]
+  R["ergResultsCheck + UpdateLP5 + ergResultsCheck"]
+  S["ValvePointOptimize"]
+  T["TURBA.CON, FillVari40, RemoveErg, RefreshKreislDAT"]
+  U["FillWheelChamberPressure from Turba LP1"]
+  V["Loop LP2..: fillAGainDat / fillLPAgain Pr T M P E"]
+  W["Write KREISL.DAT"]
+  X["Deaerator or PST: UpdateDesupratorWithTurba from TURBA ERG"]
+  Y["LaunchKreisl + CheckPower"]
+
+  A --> B --> C --> D --> E --> F --> G --> H --> I --> J --> K --> L --> M --> N --> O --> P --> Q --> R --> S --> T --> U --> V --> W --> X --> Y
+```
+
+### 9.2 Per-LP merge after Turba (unknown dimension)
+
+After the Turba stabilization block, the handler walks **each extra customer LP** (`i = 1 .. Count-1`). For `i == 1` it rebuilds the first appended block via `fillAGainDat`. For later indices it picks the unknown and calls **`fillLPAgain(index, dimension, lpRow, initList)`** with `Pr`, `T`, `M`, `P`, or `E`.
+
+```mermaid
+flowchart TD
+  L["For each extra customer LP i"]
+  Q1{"i == 1?"}
+  F1["fillAGainDat(index, initList)"]
+  Q2{"Which field is zero?"}
+  FPr["fillLPAgain(..., Pr, ...)"]
+  FT["fillLPAgain(..., T, ...)"]
+  FM["fillLPAgain(..., M, ...)"]
+  FP["fillLPAgain(..., P, ...)"]
+  FE["fillLPAgain(..., E, ...)"]
+  NXT["Next LP"]
+
+  L --> Q1
+  Q1 -->|Yes| F1 --> NXT
+  Q1 -->|No| Q2
+  Q2 -->|SteamPressure == 0| FPr --> NXT
+  Q2 -->|SteamTemp == 0| FT --> NXT
+  Q2 -->|SteamMass == 0| FM --> NXT
+  Q2 -->|PowerGeneration == 0| FP --> NXT
+  Q2 -->|ExhaustPressure == 0| FE --> NXT
+```
+
+Open-cycle mass-flow tie-up (when neither deaerator nor PST): if mass is unknown but exhaust mass is known, code uses **`SteamMass = 0.055 + ExhaustMassFlow`**; if mass is known but exhaust mass is not, **`ExhaustMassFlow = SteamMass - 0.055`**.
+
+### 9.3 LP1 into Kreisl (`fillLPINDat`)
+
+Before the ERG fill loop, **`fillLPINDat()`** writes customer LP1 boundary conditions into **`KREISL.DAT`** via `KreislDATHandler` (pressure, temperature, mass flow, power, exhaust pressure, closed-cycle makeup/condensate/PST/PRV branches, dump condenser capacity paths). It accumulates working text in **`MainTemp`** (often by appending the current `KREISL.DAT` file after edits).
+
+### 9.4 ERG back-fill for all customer LPs
+
+After LP1 is in the DAT, a loop over **`CustomerLoadPoints[1..]`** fills any zero from **`KREISL.ERG`** using `KreislERGHandlerService` (`ExtractPressure`, `ExtractTemperature`, `ExtractMassFlow`, `ExtractBackPressure`, `ExtractVolFlowForLoadPoint`). Then **`SortCustomerLoadPointsByVol()`** reorders LPs by volumetric flow.
+
+### 9.5 Standard-path DAT rebuild and checks
+
+The middle block mirrors the **standard** pipeline at scaled LP count:
+
+- `ReferenceDATSelector((int)cxLP_RngStop + 10)`
+- `cxLP_GenerateLoadPoints("Recal")` then `GenerateLoadPoints()`
+- `prepareDATFile` -> `DATFileProcessor.PrepareDATFile`
+- `LaunchTurba`
+- `ergResultsCheck` -> `UpdateLP5` -> `ergResultsCheck` again (LP5 flag on `ERGVerification`)
+- `ValvePointOptimize`
+
+### 9.6 Desuperheater update from Turba ERG
+
+If **`DeaeratorOutletTemp > 0` or `PST > 0`**, **`UpdateDesupratorWithTurba(...)`** reads **`TURBATURBAE1.DAT.ERG`** pressure/temperature/enthalpy/mass blocks and updates Kreisl desuperheater sections per LP (closed PRV with/without dump condenser, or open-cycle desuperheater helpers), then **`LaunchKreisl`** and **`CheckPower`**.
+
+### 9.7 LP validation helper (`cxLP_validateLPs`)
+
+Used to classify customer input before heavy work: counts known fields per LP (must be more than three knowns per LP in the current rule), and returns **`Power`**, **`Flow`**, **`Hybrid`**, or **`Error`** depending on whether all LPs have power, all have mass flow, or a mix.
+
+### 9.8 Inner flow: `fillLPAgain(i, unk, count, initList)`
+
+Used when **LP index `i` is not the first** extra LP and one dimension is still unknown (`unk` is **`Pr`**, **`T`**, **`M`**, **`P`**, or **`E`**). It picks a **row template file**, stamps the Kreisl LP row id, then writes boundary guesses into **`KREISL.DAT`** via `KreislDATHandler`, and appends the updated file into **`MainTemp`**.
+
+#### 9.8.1 Choose LP row template (`dat` path)
+
+```mermaid
+flowchart TD
+  A["fillLPAgain(i, unk, count, initList)"]
+  B{"DeaeratorOutletTemp positive?"}
+  C{"DumpCondensor?"}
+  D["dat = LoadPointDumpCondenPRV.DAT"]
+  E["dat = loadpointclosecyclePRV.DAT"]
+  F{"PST positive?"}
+  G["dat = loadPointD.dat"]
+  H["dat = loadPoint.dat"]
+  A --> B
+  B -->|Yes| C
+  C -->|Yes| D
+  C -->|No| E
+  B -->|No| F
+  F -->|Yes| G
+  F -->|No| H
+```
+
+#### 9.8.2 Unknown-dimension branches (same pattern for each `unk`)
+
+For every `unk`, the code does:
+
+1. copy the chosen template to `C:\testDir\KREISL.DAT`, clear it, read template text, replace **`lp` -> `count`**, append to `KREISL.DAT`
+2. fill the **known** inlet fields on `StartKreisl.filePath`
+3. drive the **unknown** field with a Kreisl sweep pattern (for example `Pr`: mass fixed, inlet pressure stepped `0.000` then `42.981`; `T`: temperature stepped `0.000` then `440`; `E`: exhaust pressure stepped `0.000` then `4.59`)
+4. optional **dump condenser** branch: capacity vs `checkIfDumpcondensorON` vs `TurnOffCondensor` lines
+5. closed-cycle tail: PRV to WPRV conversion, makeup/condensate/PST lines, `FillPressureDesh` when pressure is known and `unk` is not `Pr`
+6. **`MainTemp +=` entire `KREISL.DAT`** after edits
+
+```mermaid
+flowchart TD
+  A["Pick dat template"]
+  B["Copy template to KREISL.DAT, replace lp with count"]
+  C["Fill Kreisl DAT for this LP row"]
+  D{"unk"}
+  EPr["Pr branch: fix mass, sweep inlet P"]
+  ET["T branch: fix P, sweep inlet T"]
+  EM["M branch: sweep mass / exhaust mass helpers"]
+  EP["P branch: optional dump condenser mass path"]
+  EE["E branch: sweep exhaust P"]
+  F["Closed cycle: PRV or makeup / PST updates"]
+  G["MainTemp += read KREISL.DAT"]
+
+  A --> B --> C --> D
+  D -->|Pr| EPr --> F --> G
+  D -->|T| ET --> F --> G
+  D -->|M| EM --> F --> G
+  D -->|P| EP --> F --> G
+  D -->|E| EE --> F --> G
+```
+
+### 9.9 Inner flow: `fillAGainDat(i, initList)`
+
+Same physical idea as **`fillLPINDat`**, but for **customer index `i` inside `initList`** when rebuilding the **first** extra LP block (`i == 1` path in `cxLP_mainKreisl`). It:
+
+1. applies **closed-cycle** makeup / PST / PRV logic when `initList[i].DeaeratorOutletTemp > 0`, or **PST-only** desuperheater pressure when `PST > 0`
+2. applies **open-cycle** mass tie (`0.055` rule) when neither deaerator nor PST
+3. runs the same **Pr / T / M / P / E** ladder as `fillLPAgain`, writing Kreisl and appending **`MainTemp`** for whichever branch matches the missing field
+
+```mermaid
+flowchart TD
+  A["fillAGainDat(i, initList)"]
+  B["Closed or PST header fields on Kreisl DAT"]
+  C["Open cycle mass tie if needed"]
+  D{"First missing among Pr T M P E"}
+  E["KreislDATHandler fills + MainTemp += KREISL.DAT"]
+  A --> B --> C --> D --> E
+```
+
+### 9.10 Inner flow: `checkingPartLoadExist(customerLoadPoints)`
+
+If **any** customer row has **`PartLoad > 0`**, the method:
+
+1. scans for a **fully specified base LP** (`SteamPressure`, `SteamTemp`, `SteamMass`, `ExhaustPressure` all positive and **`PartLoad == 0`**)
+2. for that row: `RefreshKreislDAT`, `fillInputDatFileForParLoad`, rename Turba CON, **`LaunchKreisL`**, read **`ExtractPowerFromERG`** as candidate max power
+3. for rows without full thermo, it keeps **`PowerGeneration`** from the sheet as the max candidate
+4. for every row with **`PartLoad > 0`**, sets  
+   `PowerGeneration = (maxPower * PartLoad) / 100`
+
+```mermaid
+flowchart TD
+  A["checkingPartLoadExist(list)"]
+  B{"Any PartLoad positive?"}
+  C["Find base LP with full inputs and PartLoad == 0"]
+  D["RefreshKreislDAT + fillInputDatFileForParLoad"]
+  E["LaunchKreisl + read max power from ERG"]
+  F["Else use existing PowerGeneration"]
+  G["For each PartLoad row: Power = maxPower * PartLoad / 100"]
+  H["No-op if no part loads"]
+
+  A --> B
+  B -->|No| H
+  B -->|Yes| C --> D --> E
+  C -->|none| F
+  E --> G
+  F --> G
+```
+
+### 9.11 Inner flow: `CorrectLP1unknowParams()`
+
+Runs only when **`customerLPList.Count == 1`** inside `cxLP_mainKreisl`. It is a **mini calibration loop** for LP1 before the big multi-LP pipeline:
+
+1. `HBDsetDefaultCustomerParamas`, `cxLP_GenerateLoadPoints`, `ReferenceDATSelector(1)`, `cxLP_prepareDATFile(1)`, `LaunchTurba(2)`
+2. optional wheel chamber pressure write-back
+3. **`fillAGainDat`** for LP1, then **`File.WriteAllText(KREISL.DAT, MainTemp)`**
+4. optional **`UpdateDesupratorWithTurba(1)`** when closed cycle or PST
+5. `FillVari40`, copy Turba efficiency into Kreisl eff fields, then **several Turba + Kreisl launch pairs** with CON rename between them
+6. fills any remaining LP1 unknown from **`KREISL.ERG`**, then **`ClearFile`** (deletes CON side artifacts)
+
+```mermaid
+flowchart TD
+  A["CorrectLP1unknowParams"]
+  B["Mini Turba prep: ReferenceDAT + cxLP_prepare + LaunchTurba(2)"]
+  C["fillAGainDat for LP1 + write KREISL.DAT"]
+  D["Optional UpdateDesupratorWithTurba(1)"]
+  E["FillVari40 + eff from Turba LP2 output"]
+  F["Repeat Turba / Kreisl / CON rename chain"]
+  G["Fill missing LP1 fields from ERG"]
+  H["ClearFile (DeleteCONFiles)"]
+
+  A --> B --> C --> D --> E --> F --> G --> H
+```
+
+### 9.12 Inner flow: `UpdateDesupratorWithTurba(loadPoint)` (summary)
+
+Parses **`TURBATURBAE1.DAT.ERG`** blocks (`DRUECKE`, `TEMPERATUREN`, `ENTHALPIEN`, `DAMPFMENGEN`) into per-LP matrices, compares **exhaust temperature vs PST** per LP, and calls the matching **`KreislDATHandler.UpdateDesuprator...`** helpers (open cycle, closed PRV, dump condenser variants). Resets **`turbineDataModel.PST`** when customer PST is zero on LP1 or each extra LP.
+
+```mermaid
+flowchart TD
+  A["UpdateDesupratorWithTurba(loadPoint)"]
+  B["Parse Turba ERG tables into arrays"]
+  C["For each LP column up to loadPoint"]
+  D{"Exhaust temp above PST for that LP?"}
+  E["Closed + dump: UpdateDesupratorClosedPRVDumpCondensor"]
+  F["Closed no dump: UpdateDesupratorClosedPRV"]
+  G["Open: UpdateDesupratorFirst + Second"]
+  H["Customer PST == 0 then clear model PST"]
+
+  A --> B --> C --> D
+  D -->|Yes + deaerator + dump| E
+  D -->|Yes + deaerator + no dump| F
+  D -->|Yes + open| G
+  D -->|No| H
+```
 
 ---
+
 
 ## 10) Complete flow map (all paths)
 
