@@ -1348,15 +1348,110 @@ flowchart TD
   K --> E
 ```
 
-**What the DAT patchers do (high-level intent):**
+**What the DAT patchers do (detailed, with examples):**
 
-- `CorrectDatFileF(stage, gi)`:
-  - locates the matching stage row in the DAT `!ST ...` blade table
-  - forces a correction mode (in executed code it sets a field to `2`)
-  - if needed, clamps/normalizes a geometry value to at least `25` and adjusts a paired integer so it stays odd/even consistent
-- `CorrectDatFileB(stage, gi)`:
-  - bumps the `SE`-like value to the **next “NB step”** using `getNextNB(...)` (from the static `data` table)
-  - recomputes the coupled integer so it stays consistent with stage parity
+Both patchers are **small deterministic edits** to the **`!ST` blade table** in `TURBATURBAE1.DAT.DAT`. They keep one main invariant: the pair of coupled numbers (roughly “`SE`” and a linked count/setting next to it) is kept consistent by preserving the product ratio used by the code.
+
+> In executed `Exec_ERG_PowerMatch.cs` rows are split by **spaces**. In custom `Cu_ERG_PowerMatch.cs` rows are split by **`|`**. The math is the same, but the field indices differ.
+
+##### A) `CorrectDatFileF(stage, gi)` — enforce a minimum `SE` (= 25) + set correction mode
+
+**Trigger:** any LP5 stage row has a bending token `F` (from ERG).
+
+**What it changes (executed):**
+
+- Find the matching `!ST ...` row where:
+  - `lineArray[0] == stage` and `lineArray[1] == gi`
+- Treat:
+  - `SE = lineArray[4]`
+  - `SZ = lineArray[5]`
+  - “correction mode flag” = `lineArray[10]`
+- If `SE < 25` then:
+  1. compute: `ans = int64(SE * SZ / 25)` (floor/truncate)
+  2. set `SE = 25`
+  3. force `SZ` parity based on `gi` parity:
+     - if `gi` is even → make `SZ` **odd**
+     - if `gi` is odd → make `SZ` **even**
+     - (done by incrementing `ans` by 1 when needed)
+  4. set correction flag `lineArray[10] = 2`
+- Else (already `SE >= 25`):
+  - only sets correction flag `lineArray[10] = 2`
+
+**Worked example (executed):**
+
+Assume a blade row for `(stage=3, gi=2)` has:
+
+- `SE = 20`
+- `SZ = 100`
+- `gi = 2` (even)
+
+The patch does:
+
+- `ans = floor(20 * 100 / 25) = floor(80) = 80`
+- `gi` is even ⇒ `SZ` must be **odd** ⇒ `SZ = 81`
+- Set `SE = 25`
+- Set correction flag field to `2`
+
+So the pair goes from `(SE,SZ) = (20,100)` to approximately `(25,81)` while keeping the ratio logic close (since \(20×100 ≈ 25×80\), then nudged to 81 to satisfy parity rule).
+
+Mini before/after (executed `!ST` row fields only):
+
+| Field (executed) | Before | After |
+|---|---:|---:|
+| `SE` (`lineArray[4]`) | 20 | 25 |
+| `SZ` (`lineArray[5]`) | 100 | 81 |
+| correction flag (`lineArray[10]`) | *(unchanged / whatever it was)* | 2 |
+
+##### B) `CorrectDatFileB(stage, gi)` — bump `SE` to the next allowed NB step + keep parity
+
+**Trigger:** any LP5 stage row has a bending token `B` (from ERG).
+
+**What it changes (executed):**
+
+- For the matching `(stage,gi)` row, read:
+  - `SE = lineArray[4]`
+  - `SZ = lineArray[5]`
+- Compute the next allowed step:
+  - `SENextNB = getNextNB(SE)` where `getNextNB` scans the static `data` table’s first column and picks the **next higher** value.
+- Preserve the ratio with the new SE:
+  1. `ans = floor(SE * SZ / SENextNB)`
+  2. set `SE = SENextNB`
+  3. enforce parity on `SZ` based on `gi`:
+     - if `gi` is even → make `SZ` **odd**
+     - if `gi` is odd → make `SZ` **even**
+     - (again: bump `ans` by 1 when needed)
+
+**Worked example (executed):**
+
+Assume `(stage=4, gi=1)` has:
+
+- `SE = 32.0`
+- `SZ = 101`
+- `gi = 1` (odd)
+
+From the static table, the next higher `SE` after 32.0 is **40.0**.
+
+- `ans = floor(32.0 * 101 / 40.0) = floor(80.8) = 80`
+- `gi` is odd ⇒ `SZ` must be **even** ⇒ `SZ = 80` (already even, so keep)
+- Set `SE = 40.0`
+
+So the pair moves from `(32.0,101)` to `(40.0,80)` preserving the same “capacity” scale approximately and respecting the row parity rule.
+
+Mini before/after (executed `!ST` row fields only):
+
+| Field (executed) | Before | After |
+|---|---:|---:|
+| `SE` (`lineArray[4]`) | 32.0 | 40.0 |
+| `SZ` (`lineArray[5]`) | 101 | 80 |
+
+##### C) How this relates to bending repair
+
+`CorrectLP5Bending()` does not guess new geometry randomly. It uses a **rule-based, repeatable edit**:
+
+- `F` → ensure a hard minimum threshold (`SE >= 25`) + mark correction mode
+- `B` → move `SE` to the next discretized “NB” step
+
+Then `CheckPower` re-runs Turba and checks whether LP5 bending clears (looping up to ~7 iterations in both executed and custom).
 
 ### 7.11 Additional load points in executed flow
 
