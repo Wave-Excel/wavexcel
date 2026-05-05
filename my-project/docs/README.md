@@ -1289,6 +1289,63 @@ Meaning:
 - the wheel chamber pressure is pushed back into the Kreisl-side files
 - `CheckPower()` is the final gate for executed success
 
+#### 7.10.1 `CorrectLP5Bending()` (executed power match) — easy purpose + flow
+
+`CorrectLP5Bending()` lives in `src/core/Checks/Exec_ERG_PowerMatch.cs` (class `ExecPowerMatch`).
+
+**What it is for (in simple words):**
+
+- LP5 is used as the “stress / correction” operating point (see **§7.8 UpdateLP5**).
+- After Turba runs, the ERG contains stage-wise **bending status flags** for LP5.
+- If any stage in LP5 reports a bending flag (**`F`** or **`B`**), this method **patches the blade table in the Turba DAT** (`TURBATURBAE1.DAT.DAT`) for the affected stage row(s), so the next Turba run is more likely to pass bending constraints.
+
+**Inputs / outputs:**
+
+- **Reads**: `C:\testDir\TURBATURBAE1.DAT.ERG`
+- **Writes**: `C:\testDir\TURBATURBAE1.DAT.DAT` (via `CorrectDatFileF(...)` / `CorrectDatFileB(...)`)
+
+**How it decides what to fix:**
+
+- It finds the LP5 block (`#UST 5`) in the ERG.
+- It finds the stage table header line:
+  - `STUFE SIGZV SIGAZS SIGAZF SIGVS SIGAS  GSS  HSS SIGVF SIGAF  HSF PRESZ PRESS GEF`
+- It scans each stage row until a blank line.
+- It looks at the **last 4 tokens** of the row; if any of those are:
+  - **`F`** → call `CorrectDatFileF(stage, gi)`
+  - **`B`** → call `CorrectDatFileB(stage, gi)`
+
+```mermaid
+flowchart TD
+  A["CorrectLP5Bending()"]
+  B["Read TURBATURBAE1.DAT.ERG"]
+  C["Find '#UST 5' block (LP5)"]
+  D["Find stage bending table header"]
+  E["For each stage row until blank line"]
+  F["Extract stage keys: FirstVal=line[0], SecondVal=line[1]"]
+  G{"Any of last 4 tokens == 'F'?"}
+  H["CorrectDatFileF(FirstVal, SecondVal)"]
+  I{"Any of last 4 tokens == 'B'?"}
+  J["CorrectDatFileB(FirstVal, SecondVal)"]
+  K["Continue next stage row"]
+
+  A --> B --> C --> D --> E --> F --> G
+  G -->|Yes| H --> I
+  G -->|No| I
+  I -->|Yes| J --> K
+  I -->|No| K
+  K --> E
+```
+
+**What the DAT patchers do (high-level intent):**
+
+- `CorrectDatFileF(stage, gi)`:
+  - locates the matching stage row in the DAT `!ST ...` blade table
+  - forces a correction mode (in executed code it sets a field to `2`)
+  - if needed, clamps/normalizes a geometry value to at least `25` and adjusts a paired integer so it stays odd/even consistent
+- `CorrectDatFileB(stage, gi)`:
+  - bumps the `SE`-like value to the **next “NB step”** using `getNextNB(...)` (from the static `data` table)
+  - recomputes the coupled integer so it stays consistent with stage parity
+
 ### 7.11 Additional load points in executed flow
 
 If the customer has more than two load points, the executed flow continues after power match into an additional-load-point merge path.
@@ -2066,6 +2123,47 @@ So this is effectively a **feedback step from ERG to DAT**.
 So in one sentence: this function is the **stage-data feedback updater that pushes ERG deformation results back into the working DAT before the next custom-flow steps continue**.
 
 ---
+
+### 8.9 Custom power closure: `checkFinalTurbine` and `CorrectLP5Bending()` (easy spec)
+
+The custom path closes by running **custom power match + final checks** (`checkFinalTurbine`). A key helper used during closure is **`CorrectLP5Bending()`**, implemented in `src/core/Checks/Cu_ERG_PowerMatch.cs` (class `CustomPowerMatch`).
+
+**What `CorrectLP5Bending()` does (same concept as executed, custom formatting):**
+
+- It reads the LP5 stage-status table from `TURBATURBAE1.DAT.ERG` under the `#UST 5` block.
+- If any stage row has a bending flag token **`B`** or **`F`** near the end of the row, it patches the corresponding stage row in the **Turba DAT blade table** (`TURBATURBAE1.DAT.DAT`).
+- The patch is applied by calling:
+  - `CorrectDatFileB(stage, gi)` for `B`
+  - `CorrectDatFileF(stage, gi)` for `F`
+
+**Why it exists:**
+
+- In custom flow, LP5 is again the “hard” point used to validate bending-sensitive behavior.
+- Instead of abandoning the run immediately on an LP5 bending flag, the code attempts a **deterministic DAT edit** to move the design toward a pass on the next Turba rerun.
+
+**Custom vs executed differences you’ll see in code:**
+
+- The custom DAT blade table uses a different parsing format in places (rows split by `|` in the custom patchers), but the intent is the same:
+  - identify the stage by `(stage, gi)` keys coming from the ERG row,
+  - adjust the blade-table row so bending status improves,
+  - write the DAT back to disk.
+
+```mermaid
+flowchart TD
+  A["CorrectLP5Bending()"]
+  B["Read TURBATURBAE1.DAT.ERG"]
+  C["Find '#UST 5' block (LP5) + stage table header"]
+  D["Scan stage rows until blank"]
+  E{"Bending flag present? (B or F in last tokens)"}
+  FB["If F: CorrectDatFileF(stage,gi)"]
+  BB["If B: CorrectDatFileB(stage,gi)"]
+  W["Write TURBATURBAE1.DAT.DAT"]
+
+  A --> B --> C --> D --> E
+  E -->|F| FB --> W
+  E -->|B| BB --> W
+  E -->|none| D
+```
 
 ## 9) Flow-wise content: Additional load points path
 
