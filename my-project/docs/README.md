@@ -473,6 +473,8 @@ flowchart TD
 
 Below is the **detailed standard-path flowchart**, including Kreisl template selection (`RefreshKreislDAT`). Executed, custom, and additional-LP summaries are in the same gallery; **§7–§9** retain the full breakdowns.
 
+**Reading the spine:** the outer vertical chain uses node IDs **`A` … `W`** (letters only for Mermaid readability). **`D`** expands into subgraph **template selection** (inner diamonds `T1`, `T2`, … — different from **`T2a`**, which is the *second Turba launch* later on the spine). A full glossary of **`A`–`W`** is in **[§6.0 Letter legend](#standard-path-letter-legend)**.
+
 ```mermaid
 flowchart TD
   A["StartKreisl.MainKreisL"] --> B["Delete .CON/.ERG"]
@@ -702,7 +704,47 @@ Explanation:
 
 This section explains what each major block in the flowchart is doing and why it exists.
 
-### 6.1 Entry and cleanup (`A -> D`)
+<a id="standard-path-letter-legend"></a>
+
+### 6.0 Legend — §5 main-spine diagram letters (`A` … `W`)
+
+The large **standard-path Mermaid diagram** at the start of **[§5 Flowchart — Standard path](#5-flowchart-standard-path-starting-section)** gives each step on the outer chain a short **node ID** (`A`, `B`, `C`, …). Those IDs exist **only inside that figure** — they are not C# identifiers.
+
+When a subsection heading below writes **(§5: `X` → `Y`)**, it means “the part of §5’s diagram from node `X` through node `Y`.”
+
+Spine IDs and what they label in §5:
+
+| ID | Labels in §5 diagram |
+|----|-----------------------|
+| `A` | `StartKreisl.MainKreisL` |
+| `B` | Delete `.CON` / `.ERG` |
+| `C` | Create `KreislDATHandler` |
+| `D` | `RefreshKreislDAT` (same box that leads into subgraph **template selection**; inner nodes there are named `T1`, `T2`, … — see §6.2) |
+| `E` | `FillClosestTurbineEfficiency` |
+| `F` | `GetTurbaCON(ClosestProjectID)` |
+| `G` | `InitConfig` (after Kreisl setup) |
+| `H` | `LaunchKreisL` |
+| `I` | `RefreshKreislDAT` (second sync) |
+| `J` | `InitConfig` (after second refresh) |
+| `K` | `ReferenceDATSelector` |
+| `L` | `GenerateLoadPoints` |
+| `M` | `PrepareDATFile` |
+| `N` | `LaunchTurba` |
+| `O` | `ERGResultsCheck` |
+| `P` | `UpdateLP5` |
+| `Q` | `ERGResultsCheck` (second pass) |
+| `R` | `ValvePointOptimize` |
+| `S` | `FillVari40` |
+| `T2a` | Second `LaunchTurba` (label in diagram is **`T2a`** so it does not clash with template diamonds `T1`, `T2`, … inside `RefreshKreislDAT`) |
+| `U` | Rename `TURBATURBAE1.DAT.CON` → `TURBA.CON` |
+| `V` | `FillWheelChamberPressure` |
+| `W` | `PowerMatch.CheckPower` |
+
+**Do not confuse:** §6.2 heading **“subgraph (`T`)”** refers to the **whole template-selection subgraph** in §5 (nicknamed **`T`** in prose). That is unrelated to spine node **`T2a`** (second Turba run).
+
+---
+
+### 6.1 Entry and cleanup (§5: `A` → `D`)
 
 The flow starts from `StartKreisl.MainKreisL`, then immediately performs runtime cleanup:
 
@@ -716,9 +758,16 @@ Why this matters:
 - template selection must happen before running Kreisl/Turba,
 - all later calculations depend on this initial DAT state.
 
-### 6.2 Template selection subgraph (`T`)
+### 6.2 Template selection subgraph (**`T`** = inner §5 subgraph on node `D`)
 
-`RefreshKreislDAT` is the most important decision engine in the standard path.
+`RefreshKreislDAT` is the most important decision engine in the standard path. **In prose here, `T` means the nested “template selection” logic** hanging off **`D`** in §5 (`tmplSel`), not spine node **`T2a`**.
+
+In the **[§5 Mermaid diagram](#5-flowchart-standard-path-starting-section)**, decision node **`T1`** asks: *“Is `DeaeratorOutletTemperature` in the load point greater than zero?”*
+
+- **`T1 = Yes`** — you leave `T1` on the **Yes** arrow → **closed-cycle with deaerator** branch.
+- **`T1 = No`** — you leave `T1` on the **No** arrow → **`DeaeratorOutletTemperature` is not greater than zero** (not set / zero) → treated as **open-cycle / PST** side of template selection (“no deaerator outlet temp”).
+
+So **`T1` is only a diagram shortcut for that first diamond**; it is not a separate variable in code.
 
 It first determines whether the request is **closed-cycle-like** or **open-cycle-like**:
 
@@ -763,7 +812,7 @@ For non-PRV outcomes, the selected PRV template is converted using:
 
 This conversion step is essential because template families are reused and then adjusted to match final mode.
 
-### 6.3 Post-template thermodynamic initialization (`D -> J`)
+### 6.3 Post-template thermodynamic initialization (§5: `D` → `J`)
 
 After template decision:
 
@@ -775,7 +824,7 @@ After template decision:
 
 The key idea is: **select -> run -> resync** before entering final DAT/Turba checks.
 
-### 6.4 Main computation pipeline (`K -> R`)
+### 6.4 Main computation pipeline (§5: `K` → `R`)
 
 This is the operational sequence:
 
@@ -792,15 +841,17 @@ Why LP5 is checked again:
 - LP5 often acts as a corrective or boundary operating point,
 - second ERG check ensures the updated point still satisfies constraints.
 
-### 6.5 Final stabilization and power closure (`S -> W`)
+### 6.5 Final stabilization and power closure (§5: `S` → `T2a` → `U` → `V` → `W`)
+
+This is the **tail of the §5 spine after valve optimization** — not only `S` and `W`, but every hop in between (see **§6.0**). Some older notes abbreviated this as “`S` → `W`”; the diagram’s full chain is below.
 
 After valve optimization:
 
-1. `FillVari40` updates DAT/Kreisl variable settings.
-2. `LaunchTurba` runs once more on updated values.
-3. `Rename TURBATURBAE1.DAT.CON -> TURBA.CON` normalizes output naming for downstream use.
-4. `FillWheelChamberPressure` pushes wheel chamber pressure back to Kreisl/DAT side.
-5. `PowerMatch.CheckPower` performs final power closure.
+1. **`S` —** `FillVari40` updates DAT/Kreisl variable settings.
+2. **`T2a` —** `LaunchTurba` runs once more on updated values.
+3. **`U` —** `Rename TURBATURBAE1.DAT.CON -> TURBA.CON` normalizes output naming for downstream use.
+4. **`V` —** `FillWheelChamberPressure` pushes wheel chamber pressure back to Kreisl/DAT side.
+5. **`W` —** `PowerMatch.CheckPower` performs final power closure.
 
 This final block ensures the output is not just feasible, but also aligned with target power behavior.
 
