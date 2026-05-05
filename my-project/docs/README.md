@@ -45,7 +45,7 @@ The code follows one top-level dispatch path, then branches into sub-flows:
 5. **Additional load points flow**
    - Activated in standard/executed/custom when customer load points exceed base set (`CustomerLoadPoints.Count > 1`), and iterated LP-wise.
 
-For **overview diagrams of all four paths in one place**, see the [Flowcharts gallery (all automation paths overview)](#flowcharts-gallery-all-automation-paths-overview) below. Detailed subgraphs remain in §5–§9.
+For **overview diagrams of all four paths in one place**, see the [Flowcharts gallery (all automation paths overview)](#flowcharts-gallery-all-automation-paths-overview) below. Detailed subgraphs remain in **Sections 5–9**.
 
 ---
 
@@ -77,7 +77,7 @@ Then template choice is refined by:
 
 ## 4) Code locations (quick map)
 
-For **explicit execution entry methods** (`Main4`, `MainKreisL`, `MainExecuted`, custom, additional LP), see **[§11 Code documentation — execution starting points](#11-code-documentation-execution-starting-points)**.
+For **explicit execution entry methods** (`Main4`, `MainKreisL`, `MainExecuted`, custom, additional LP), see **[Section 11: Code documentation — execution starting points](#11-code-documentation-execution-starting-points)**.
 
 - `src/kreisl.cs`
   - `StartKreisl.MainKreisL(...)` orchestration
@@ -93,11 +93,11 @@ For **explicit execution entry methods** (`Main4`, `MainKreisL`, `MainExecuted`,
 
 ## Flowcharts gallery (all automation paths overview)
 
-This section collects **compact end-to-end flowcharts** for the four pipelines, plus **sub-charts** under each path that zoom into the main substeps (what actually runs between the big boxes). Full-size template and branch logic live in **§5–§9**.
+This section collects **compact end-to-end flowcharts** for the four pipelines, plus **sub-charts** under each path that zoom into the main substeps (what actually runs between the big boxes). Full-size template and branch logic live in **Sections 5–9**.
 
 ### Standard path flowchart (overview)
 
-Detailed template selection (`RefreshKreislDAT`), Kreisl launches, intermediate Turba/varicode rename, and bending/thrust escalation are documented in **[§5](#5-flowchart-standard-path-starting-section)** and **[§6](#6-theory-walkthrough-explain-the-full-standard-flowchart)**.
+Detailed template selection (`RefreshKreislDAT`), Kreisl launches, intermediate Turba/varicode rename, and bending/thrust escalation are documented in **[Section 5](#5-flowchart-standard-path-starting-section)** and **[Section 6](#6-theory-walkthrough-explain-the-full-standard-flowchart)**.
 
 ```mermaid
 flowchart TD
@@ -112,7 +112,7 @@ flowchart TD
     S4["TurbaConfig.LaunchTurba"]
     S5["ERGVerification.ErgResultsCheck"]
     S6["ValvePointOptimizer.ValvePointOptimize"]
-    S7["PowerMatch.CheckPower + post-Turba stabilization per §5.1.5"]
+    S7["PowerMatch.CheckPower + post-Turba stabilization per Section 5.1.5"]
 
     E1 --> S0
     E2 --> S0
@@ -187,7 +187,7 @@ flowchart TD
 
 ### Executed path flowchart (overview)
 
-Criteria lifecycle, fallback `BCD1120 → BCD1190 → Main_CustomFlowPathTest`, and per-checker diagrams are in **[§7](#7-flow-wise-content-executed-flow-path)**.
+Criteria lifecycle, fallback `BCD1120 → BCD1190 → Main_CustomFlowPathTest`, and per-checker diagrams are in **[Section 7](#7-flow-wise-content-executed-flow-path)**.
 
 ```mermaid
 flowchart TD
@@ -206,7 +206,7 @@ flowchart TD
     E9["ErgResultsCheckExecuted(criteria,true)"]
     EA["ValvePointOptimize(maxLp)"]
     EB["Final stabilization FillVari40 + Turba · TURBA.CON · FillWheelChamberPressure"]
-    EC["CheckPower(maxLp); additional LPs merge if §9 applies"]
+    EC["CheckPower(maxLp); additional LPs merge if Section 9 applies"]
 
     E0 --> E0b --> E1 --> E2 --> E3 --> E4 --> E5
     E5 -->|no · re-select| E3
@@ -271,7 +271,7 @@ flowchart TD
 
 ### Custom path flowchart (overview)
 
-Nearest DAT/PSO and `TurnaConvert` / `UpdatePunConvertor` detail are in **[§8](#8-flow-wise-content-custom-flow-path)**.
+Nearest DAT/PSO and `TurnaConvert` / `UpdatePunConvertor` detail are in **[Section 8](#8-flow-wise-content-custom-flow-path)**.
 
 ```mermaid
 flowchart TD
@@ -367,7 +367,7 @@ flowchart TD
 
 ### Additional load points flowchart (overview)
 
-Symbols (`Pr/T/M/P/E`), `fillLPINDat`, `MainTemp`, and Kreisl merge loops are spelled out in **[§9](#9-flow-wise-content-additional-load-points-path)**.
+Symbols (`Pr/T/M/P/E`), `fillLPINDat`, `MainTemp`, and Kreisl merge loops are spelled out in **[Section 9](#9-flow-wise-content-additional-load-points-path)**.
 
 ```mermaid
 flowchart TD
@@ -471,9 +471,9 @@ flowchart TD
 
 > **Overview chart:** [Standard path flowchart](#standard-path-flowchart-overview) in the [flowcharts gallery](#flowcharts-gallery-all-automation-paths-overview).
 
-Below is the **detailed standard-path flowchart**, including Kreisl template selection (`RefreshKreislDAT`). Executed, custom, and additional-LP summaries are in the same gallery; **§7–§9** retain the full breakdowns.
+Below is the **detailed standard-path flowchart**, including Kreisl template selection (`RefreshKreislDAT`). Executed, custom, and additional-LP summaries are in the same gallery; **Sections 7–9** retain the full breakdowns.
 
-**Reading the spine:** the outer vertical chain uses node IDs **`A` … `W`** (letters only for Mermaid readability). **`D`** expands into subgraph **template selection** (inner diamonds `T1`, `T2`, … — different from **`T2a`**, which is the *second Turba launch* later on the spine). A full glossary of **`A`–`W`** is in **[§6.0 Letter legend](#standard-path-letter-legend)**.
+**Reading the spine:** the outer vertical chain uses node IDs **`A` … `W`** (letters only for Mermaid readability). **`D`** expands into subgraph **template selection** (inner diamonds `T1`, `T2`, … — different from **`T2a`**, which is the *second Turba launch* later on the spine). A full glossary of **`A`–`W`** is in **[Section 6.0: Letter legend](#standard-path-letter-legend)**.
 
 ```mermaid
 flowchart TD
@@ -578,7 +578,7 @@ flowchart TD
 
 ### 5.0 End-to-end pipeline (shared diagram)
 
-This is the clean top-level view of how inputs move through template selection, efficiency, prefeasibility, and the Standard → Executed → Custom fallback chain before **Create HMBD**. It sits before the detailed Standard-path splits in §5.1.
+This is the clean top-level view of how inputs move through template selection, efficiency, prefeasibility, and the Standard → Executed → Custom fallback chain before **Create HMBD**. It sits before the detailed Standard-path splits in Section 5.1.
 
 ![End-to-end pipeline: inputs through prefeasibility to Standard / Executed / Custom and HMBD](assets/pipeline-hmbd-flowchart.png)
 
@@ -706,20 +706,20 @@ This section explains what each major block in the flowchart is doing and why it
 
 <a id="standard-path-letter-legend"></a>
 
-### 6.0 Legend — §5 main-spine diagram letters (`A` … `W`)
+### 6.0 Legend — Section 5 main-spine diagram letters (`A` … `W`)
 
-The large **standard-path Mermaid diagram** at the start of **[§5 Flowchart — Standard path](#5-flowchart-standard-path-starting-section)** gives each step on the outer chain a short **node ID** (`A`, `B`, `C`, …). Those IDs exist **only inside that figure** — they are not C# identifiers.
+The large **standard-path Mermaid diagram** at the start of **[Section 5: Flowchart — Standard path](#5-flowchart-standard-path-starting-section)** gives each step on the outer chain a short **node ID** (`A`, `B`, `C`, …). Those IDs exist **only inside that figure** — they are not C# identifiers.
 
-When a subsection heading below writes **(§5: `X` → `Y`)**, it means “the part of §5’s diagram from node `X` through node `Y`.”
+When a subsection heading below writes **(Section 5: `X` → `Y`)**, it means “the part of Section 5’s diagram from node `X` through node `Y`.”
 
-Spine IDs and what they label in §5:
+Spine IDs and what they label in Section 5:
 
-| ID | Labels in §5 diagram |
+| ID | Labels in Section 5 diagram |
 |----|-----------------------|
 | `A` | `StartKreisl.MainKreisL` |
 | `B` | Delete `.CON` / `.ERG` |
 | `C` | Create `KreislDATHandler` |
-| `D` | `RefreshKreislDAT` (same box that leads into subgraph **template selection**; inner nodes there are named `T1`, `T2`, … — see §6.2) |
+| `D` | `RefreshKreislDAT` (same box that leads into subgraph **template selection**; inner nodes there are named `T1`, `T2`, … — see Section 6.2) |
 | `E` | `FillClosestTurbineEfficiency` |
 | `F` | `GetTurbaCON(ClosestProjectID)` |
 | `G` | `InitConfig` (after Kreisl setup) |
@@ -740,11 +740,11 @@ Spine IDs and what they label in §5:
 | `V` | `FillWheelChamberPressure` |
 | `W` | `PowerMatch.CheckPower` |
 
-**Do not confuse:** §6.2 heading **“subgraph (`T`)”** refers to the **whole template-selection subgraph** in §5 (nicknamed **`T`** in prose). That is unrelated to spine node **`T2a`** (second Turba run).
+**Do not confuse:** Section 6.2 heading **“subgraph (`T`)”** refers to the **whole template-selection subgraph** in Section 5 (nicknamed **`T`** in prose). That is unrelated to spine node **`T2a`** (second Turba run).
 
 ---
 
-### 6.1 Entry and cleanup (§5: `A` → `D`)
+### 6.1 Entry and cleanup (Section 5: `A` → `D`)
 
 The flow starts from `StartKreisl.MainKreisL`, then immediately performs runtime cleanup:
 
@@ -758,11 +758,11 @@ Why this matters:
 - template selection must happen before running Kreisl/Turba,
 - all later calculations depend on this initial DAT state.
 
-### 6.2 Template selection subgraph (**`T`** = inner §5 subgraph on node `D`)
+### 6.2 Template selection subgraph (**`T`** = inner Section 5 subgraph on node `D`)
 
-`RefreshKreislDAT` is the most important decision engine in the standard path. **In prose here, `T` means the nested “template selection” logic** hanging off **`D`** in §5 (`tmplSel`), not spine node **`T2a`**.
+`RefreshKreislDAT` is the most important decision engine in the standard path. **In prose here, `T` means the nested “template selection” logic** hanging off **`D`** in Section 5 (`tmplSel`), not spine node **`T2a`**.
 
-In the **[§5 Mermaid diagram](#5-flowchart-standard-path-starting-section)**, decision node **`T1`** asks: *“Is `DeaeratorOutletTemperature` in the load point greater than zero?”*
+In the **[Section 5 Mermaid diagram](#5-flowchart-standard-path-starting-section)**, decision node **`T1`** asks: *“Is `DeaeratorOutletTemperature` in the load point greater than zero?”*
 
 - **`T1 = Yes`** — you leave `T1` on the **Yes** arrow → **closed-cycle with deaerator** branch.
 - **`T1 = No`** — you leave `T1` on the **No** arrow → **`DeaeratorOutletTemperature` is not greater than zero** (not set / zero) → treated as **open-cycle / PST** side of template selection (“no deaerator outlet temp”).
@@ -812,7 +812,7 @@ For non-PRV outcomes, the selected PRV template is converted using:
 
 This conversion step is essential because template families are reused and then adjusted to match final mode.
 
-### 6.3 Post-template thermodynamic initialization (§5: `D` → `J`)
+### 6.3 Post-template thermodynamic initialization (Section 5: `D` → `J`)
 
 After template decision:
 
@@ -824,7 +824,7 @@ After template decision:
 
 The key idea is: **select -> run -> resync** before entering final DAT/Turba checks.
 
-### 6.4 Main computation pipeline (§5: `K` → `R`)
+### 6.4 Main computation pipeline (Section 5: `K` → `R`)
 
 This is the operational sequence:
 
@@ -841,9 +841,9 @@ Why LP5 is checked again:
 - LP5 often acts as a corrective or boundary operating point,
 - second ERG check ensures the updated point still satisfies constraints.
 
-### 6.5 Final stabilization and power closure (§5: `S` → `T2a` → `U` → `V` → `W`)
+### 6.5 Final stabilization and power closure (Section 5: `S` → `T2a` → `U` → `V` → `W`)
 
-This is the **tail of the §5 spine after valve optimization** — not only `S` and `W`, but every hop in between (see **§6.0**). Some older notes abbreviated this as “`S` → `W`”; the diagram’s full chain is below.
+This is the **tail of the Section 5 spine after valve optimization** — not only `S` and `W`, but every hop in between (see **Section 6.0**). Some older notes abbreviated this as “`S` → `W`”; the diagram’s full chain is below.
 
 After valve optimization:
 
@@ -1296,7 +1296,7 @@ Meaning:
 **What it is for (in simple words):**
 
 - This is part of the **`CheckPower(maxLp)` closure loop**. After no-load optimization, `CheckPower` looks at LP5 bending; if bending is reported it keeps trying repairs and re-running Turba.
-- LP5 is used as a “stress / correction” operating point (see **§7.8 UpdateLP5**).
+- LP5 is used as a “stress / correction” operating point (see **Section 7.8 UpdateLP5**).
 - After Turba runs, the ERG contains stage-wise **bending status flags** for LP5.
 - If any stage in LP5 reports a bending flag (**`F`** or **`B`**), `CorrectLP5Bending()` **patches the blade table in the Turba DAT** (`TURBATURBAE1.DAT.DAT`) for the affected stage row(s), so the next Turba run is more likely to pass bending constraints.
 
@@ -2727,7 +2727,7 @@ This section maps **where execution actually starts in code** (types, files, and
 | Path | Type / method | File | Namespace | Role |
 |------|----------------|------|-----------|------|
 | **Standard (UI-style pipeline)** | `StartExec.Main4` | `src/Program.cs` | `StartExecutionMain` | Builds host, `RefreshKreislDAT`, `InitConfig`, HBD defaults, `DatFileSelector.ReferenceDATSelector`, Turba launch, ERG + valve + `PowerMatch`. |
-| **Standard (Kreisl-first orchestration)** | `StartKreisl.MainKreisL` | `src/kreisl.cs` | `StartKreislExecution` | Longer Kreisl-centric sequence: cleanup, template refresh, `FillClosestTurbineEfficiency`, Kreisl launches, `ReferenceDATSelector`, stabilization steps through `PowerMatch` (matches §5 top-level diagram). |
+| **Standard (Kreisl-first orchestration)** | `StartKreisl.MainKreisL` | `src/kreisl.cs` | `StartKreislExecution` | Longer Kreisl-centric sequence: cleanup, template refresh, `FillClosestTurbineEfficiency`, Kreisl launches, `ReferenceDATSelector`, stabilization steps through `PowerMatch` (matches Section 5 top-level diagram). |
 | **Prefeasibility → branch** | `DatFileSelector.ReferenceDATSelector` | `src/core/HMBD/Ref_DAT_selector.cs` | `HMBD.Ref_DAT_selector` | After `fillPrefeasibilityDecisionChecks`, routes to standard template copy **or** `MainExecutedClass.GotoBCD1190(maxLp)` **or** cancellation when outside automated scope. Alternate path: `FlowPathSelector` in `Exec_Ref_DAT_Selector.cs` (`HMBD.Exec_Ref_DAT_Selector`) calls `MainExecuted(...)` under alternate pre-feasibility branches (includes `Throttle`). |
 | **Executed** | `MainExecutedClass.MainExecuted(criteria, maxLp)` | `src/Main_Executed.cs` | `StartExecutionMain` | Core executed pipeline; `GotoBCD1120` / `GotoBCD1190` delegate here with `BCD1120` / `BCD1190`. |
 | **Executed (shortcuts)** | `GotoBCD1120`, `GotoBCD1190` | `src/Main_Executed.cs` | `StartExecutionMain` | Public entry points used from `Ref_DAT_selector`, ERG checkers, and related classes. |
@@ -2769,7 +2769,7 @@ Solid arrows are representative; actual wiring depends on the active page and LP
 
 ### 11.4 How to extend this documentation
 
-Later **method-by-method** chapters can cite: **caller → callee → condition → §flowchart subsection**. The gallery links **Standard → §5–§6**, **Executed → §7**, **Custom → §8**, **Additional LP → §9**.
+Later **method-by-method** chapters can cite: **caller → callee → condition → flowchart subsection**. The gallery links **Standard → Sections 5–6**, **Executed → Section 7**, **Custom → Section 8**, **Additional LP → Section 9**.
 
 ---
 
