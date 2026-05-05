@@ -2309,6 +2309,58 @@ Implementation lives mainly in `AdditionalLoadPoints.cs` (`CustomLoadPointHandle
 
 ### 9.1 High-level flow (`cxLP_mainKreisl`)
 
+If you open `src/AdditionalLoadPoints.cs`, it can feel confusing because **two different pipelines are stitched together**:
+
+- **Phase 1 (Kreisl-side LP preparation)**: take customer LPs, write LP1 into `KREISL.DAT`, run Kreisl as needed, and back-fill missing values from `KREISL.ERG`, then sort LPs by volumetric flow.
+- **Phase 2 (Standard-mirror Turba block)**: run the normal **Reference DAT → internal LPs → Turba → ERG → UpdateLP5 → ERG → valve** sequence to stabilize the design at the chosen internal points.
+- **Phase 3 (Per-customer-LP merge loop)**: for each extra customer LP, write/update the Kreisl DAT block using `fillAGainDat` / `fillLPAgain` until all customer LPs are merged, then do final desuperheater sync (if closed/PST) and close with Kreisl + `CheckPower`.
+
+#### 9.1.1 Main flow (phased and readable)
+
+```mermaid
+flowchart TD
+  A0["cxLP_mainKreisl(customerLPList)"]
+
+  subgraph P1["Phase 1: Kreisl-side LP preparation"]
+    direction TB
+    A1["checkingPartLoadExist + snapshot initList + LPNumber map"]
+    A2["DeleteCONFiles + fillCustomerLoadPointList"]
+    A3["RefreshKreislDAT + cxLP_GetLPcount"]
+    A4["fillLPINDat(): write customer LP1 into KREISL.DAT"]
+    A5["Back-fill zeros from KREISL.ERG (Pr/T/M/E) + compute VolFlow"]
+    A6["SortCustomerLoadPointsByVol"]
+    A7["Closed-cycle extras: DumpCondensor Capacity LP + PST default + cxLP_RngStop++"]
+    A8["fillLoadPointList + RefreshKreislDAT + FillInputDat (+ CorrectLP1unknowParams when single LP)"]
+  end
+
+  subgraph P2["Phase 2: Standard-mirror Turba stabilization"]
+    direction TB
+    B1["HBD defaults + eff init + persist power"]
+    B2["ReferenceDATSelector(cxLP_RngStop + 10)"]
+    B3["cxLP_GenerateLoadPoints(Recal) + GenerateLoadPoints()"]
+    B4["prepareDATFile(cxLP_RngStop + 10)"]
+    B5["LaunchTurba(cxLP_RngStop + 10)"]
+    B6["ergResultsCheck → UpdateLP5 → ergResultsCheck"]
+    B7["ValvePointOptimize"]
+    B8["Ensure TURBA.CON + FillVari40 + RemoveErg + RefreshKreislDAT"]
+    B9["FillWheelChamberPressure from Turba LP1"]
+  end
+
+  subgraph P3["Phase 3: Merge remaining customer LPs back into KREISL.DAT"]
+    direction TB
+    C1["Loop extra customer LPs (i = 1..Count-1)"]
+    C2["i==1: fillAGainDat(index, initList)"]
+    C3["else: choose missing dimension Pr/T/M/P/E → fillLPAgain(index, unk, count, initList)"]
+    C4["Write merged KREISL.DAT from MainTemp"]
+    C5["If closed-cycle or PST: UpdateDesupratorWithTurba(loadPointCount)"]
+    C6["LaunchKreisl + CheckPower(10 + cxLP_RngStop)"]
+  end
+
+  A0 --> P1 --> P2 --> P3
+```
+
+#### 9.1.2 Full chain chart (original “single line” view)
+
 ```mermaid
 flowchart TD
   A["cxLP_mainKreisl(customerLPList)"]
