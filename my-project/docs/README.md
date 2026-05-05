@@ -45,6 +45,8 @@ The code follows one top-level dispatch path, then branches into sub-flows:
 5. **Additional load points flow**
    - Activated in standard/executed/custom when customer load points exceed base set (`CustomerLoadPoints.Count > 1`), and iterated LP-wise.
 
+For **overview diagrams of all four paths in one place**, see the [Flowcharts gallery (all automation paths overview)](#flowcharts-gallery-all-automation-paths-overview) below. Detailed subgraphs remain in §5–§9.
+
 ---
 
 ## 3) HMBD logic families used in code
@@ -75,6 +77,8 @@ Then template choice is refined by:
 
 ## 4) Code locations (quick map)
 
+For **explicit execution entry methods** (`Main4`, `MainKreisL`, `MainExecuted`, custom, additional LP), see **[§11 Code documentation — execution starting points](#11-code-documentation-execution-starting-points)**.
+
 - `src/kreisl.cs`
   - `StartKreisl.MainKreisL(...)` orchestration
   - `FillInputValues()` branch behavior for open/closed conditions
@@ -87,10 +91,387 @@ Then template choice is refined by:
 
 ---
 
+## Flowcharts gallery (all automation paths overview)
+
+This section collects **compact end-to-end flowcharts** for the four pipelines, plus **sub-charts** under each path that zoom into the main substeps (what actually runs between the big boxes). Full-size template and branch logic live in **§5–§9**.
+
+### Standard path flowchart (overview)
+
+Detailed template selection (`RefreshKreislDAT`), Kreisl launches, intermediate Turba/varicode rename, and bending/thrust escalation are documented in **[§5](#5-flowchart-standard-path-starting-section)** and **[§6](#6-theory-walkthrough-explain-the-full-standard-flowchart)**.
+
+```mermaid
+flowchart TD
+  subgraph STD["Standard path"]
+    direction TB
+    E1["Entry: StartExec.Main4 — src/Program.cs"]
+    E2["Entry: StartKreisl.MainKreisL — src/kreisl.cs"]
+    S0["Host + config · Delete .CON /.ERG · KreislDATHandler.RefreshKreislDAT"]
+    S1["InitConfig · HBDPowerCalculator HBD defaults · nearest efficiency"]
+    S2["DatFileSelector.ReferenceDATSelector · LoadPointGen.GenerateLoadPoints"]
+    S3["DATFileProcessor.PrepareDATFile"]
+    S4["TurbaConfig.LaunchTurba"]
+    S5["ERGVerification.ErgResultsCheck"]
+    S6["ValvePointOptimizer.ValvePointOptimize"]
+    S7["PowerMatch.CheckPower + post-Turba stabilization per §5.1.5"]
+
+    E1 --> S0
+    E2 --> S0
+    S0 --> S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7
+  end
+```
+
+#### Standard path — sub-charts (what happens inside the boxes)
+
+**Sub-chart STD-A — Pre-feasibility and who picks the reference DAT (`DatFileSelector`)**
+
+```mermaid
+flowchart TD
+  A["ReferenceDATSelector(maxLp)"]
+  B["fillPrefeasibilityDecisionChecks"]
+  D1{"Decision == TRUE"}
+  D1 -->|Yes| S["SelectStandard → CopyRefDATFile"]
+  V{"Variant == -1"}
+  S --> V
+  V -->|Yes| TERM["TerminateIgniteX CopyRefDATFile"]
+  V -->|No| OK["Working standard DAT"]
+  D1 -->|No| D2{"Decision_2 == TRUE"}
+  D2 -->|Yes| E1190["MainExecutedClass.GotoBCD1190"]
+  D2 -->|No| CAN["TurbineDesignPage.cts.Cancel 2 GBC scope"]
+  A --> B --> D1
+```
+
+**Sub-chart STD-B — Kreisl template family (`RefreshKreislDAT` logic, simplified)**
+
+```mermaid
+flowchart TD
+  R["RefreshKreislDAT"]
+  Q1{"DeaeratorOutletTemp > 0"}
+  Q1 -->|No| O1{"Process steam temp PST > 0"}
+  O1 -->|No| T0["kreislp1.dat without PST"]
+  O1 -->|Yes| E1{"KREISL.ERG exists"}
+  E1 -->|No| W0["Default without desuperheater"]
+  E1 -->|Yes| CMP1["exhaustTemp vs PST"]
+  CMP1 -->|below PST| W0
+  CMP1 -->|else| W1["With desuperheater"]
+  Q1 -->|Yes| Q2{"DumpCondensor"}
+  Q2 --> PR["PRV check tsatvonp vs deaerator temp"]
+  PR --> CX["Pick CloseCycle DAT + IsPRVTemplate"]
+  CX --> DES["ERG exhaust vs PST or safe default"]
+  DES --> AJ["UpdateTemplate PRV to WPRV if needed"]
+  R --> Q1
+```
+
+**Sub-chart STD-C — Compute core (between “LPs generated” and “valve optimize”)**
+
+```mermaid
+flowchart LR
+  G["GenerateLoadPoints"] --> P["PrepareDATFile"]
+  P --> TB["LaunchTurba"]
+  TB --> ER1["ERGResultsCheck"]
+  ER1 --> U5["UpdateLP5"]
+  U5 --> ER2["ERGResultsCheck"]
+  ER2 --> VO["ValvePointOptimize"]
+```
+
+**Sub-chart STD-D — Closure strip (tie Turba ↔ Kreisl, then power)**
+
+```mermaid
+flowchart TD
+  F["FillVari40"]
+  T2["LaunchTurba again"]
+  RN["Rename TURBATURBAE1.DAT.CON → TURBA.CON"]
+  WH["FillWheelChamberPressure"]
+  PM["PowerMatch.CheckPower"]
+  F --> T2 --> RN --> WH --> PM
+```
+
+### Executed path flowchart (overview)
+
+Criteria lifecycle, fallback `BCD1120 → BCD1190 → Main_CustomFlowPathTest`, and per-checker diagrams are in **[§7](#7-flow-wise-content-executed-flow-path)**.
+
+```mermaid
+flowchart TD
+  subgraph EXE["Executed path"]
+    direction TB
+    E0["Entry: MainExecutedClass.GotoBCD1120 / GotoBCD1190 — src/Main_Executed.cs"]
+    E0b["MainExecuted(criteria,maxLp): BCD1120 | BCD1190 | Throttle"]
+    E1["Retry gates: throttleCounters · mainCallCounters MAX_THROTTLE_CALLS etc."]
+    E2["HMBD executed defaults · PowerKNN(criteria) · MoveYAndSetParams"]
+    E3["ReferenceDATSelectorExecuted(criteria)"]
+    E4["LoadDatFile · GenerateLoadPoints(maxLp) · PrepareDATFileExecuted(maxLp)"]
+    E5{"Wheel chamber pressure valid?"}
+    E6["LaunchTurba(maxLp)"]
+    E7["ErgResultsCheckExecuted(criteria,false)"]
+    E8["UpdateLP5"]
+    E9["ErgResultsCheckExecuted(criteria,true)"]
+    EA["ValvePointOptimize(maxLp)"]
+    EB["Final stabilization FillVari40 + Turba · TURBA.CON · FillWheelChamberPressure"]
+    EC["CheckPower(maxLp); additional LPs merge if §9 applies"]
+
+    E0 --> E0b --> E1 --> E2 --> E3 --> E4 --> E5
+    E5 -->|no · re-select| E3
+    E5 -->|yes| E6 --> E7 --> E8 --> E9 --> EA --> EB --> EC
+  end
+```
+
+#### Executed path — sub-charts (criteria gates and ERG sandwich)
+
+**Sub-chart EXE-A — Retry / fallback ladder (same idea as `MainExecuted`)**
+
+```mermaid
+flowchart TD
+  START["Counters updated criterion still allowed"]
+  TH{"Throttle criterion and retries over MAX_THROTTLE_CALLS"}
+  TH -->|Yes| RTH["Return leave throttle executed path"]
+  TH -->|No| BD1{"On BCD1120 and neighbor budget exhausted"}
+  BD1 -->|Yes| H1190["Hand off rerun as BCD1190"]
+  BD1 -->|No| BD2{"On BCD1190 and budget exhausted"}
+  BD2 -->|Yes| HC["Main_CustomFlowPathTest maxLp"]
+  BD2 -->|No| RUN["Run DAT select Turba ERG sandwich power"]
+  START --> TH
+```
+
+**Sub-chart EXE-B — Reference DAT chosen by criterion**
+
+```mermaid
+flowchart TD
+  A["ReferenceDATSelectorExecuted criteria"]
+  B["GetFlowPathExecuted criteria"]
+  C{"criteria"}
+  C -->|BCD1120| D["SelectExecutedFlowPath BCD1120"]
+  C -->|BCD1190| E["SelectExecutedFlowPath BCD1190"]
+  C -->|Throttle| F["SelectExecutedFlowPath Throttle"]
+  D --> G["CopyRefDATFile from ExecutedDB match"]
+  E --> G
+  F --> G
+  A --> B --> C
+```
+
+**Sub-chart EXE-C — Turba + ERG “sandwich” around LP5**
+
+```mermaid
+flowchart LR
+  TB["LaunchTurba maxLp"] --> E0["ErgResultsCheckExecuted criteria isLP5 false"]
+  E0 --> U5["UpdateLP5"]
+  U5 --> E1["ErgResultsCheckExecuted criteria isLP5 true"]
+  E1 --> VO["ValvePointOptimize maxLp"]
+```
+
+**Sub-chart EXE-D — Final stabilization (same shape as standard tail)**
+
+```mermaid
+flowchart TD
+  V40["FillVari40"]
+  TB2["LaunchTurba"]
+  RN["Rename to TURBA.CON"]
+  WCP["FillWheelChamberPressure"]
+  CP["CheckPower maxLp"]
+  V40 --> TB2 --> RN --> WCP --> CP
+```
+
+### Custom path flowchart (overview)
+
+Nearest DAT/PSO and `TurnaConvert` / `UpdatePunConvertor` detail are in **[§8](#8-flow-wise-content-custom-flow-path)**.
+
+```mermaid
+flowchart TD
+  subgraph CST["Custom path"]
+    direction TB
+    C0["Entry: CustomExecutedClass.Main_CustomFlowPathTest(mxlp) — src/Main_Custom.cs"]
+    C1["Cleanup: DeleteCONFiles · RefreshKreislDAT"]
+    C2["HMBD defaults · CustomLoadPointGenerator.GenerateLoadPoints"]
+    C3["fillPrefeasibilityDecisionChecks"]
+    C4["GetNearestParams_Custom — copy/load custom reference DAT"]
+    C5["CustomDATFileProcessor.PrepareDatFile(mxlp)"]
+    C6["BCD_UPDATE(mxlp)"]
+    C7["PSO InvokeTurbineDesigner"]
+    C8["ERG_CUSTOM_BASE_CHECKS"]
+    C9["TurnaConvert · UpdatePunConvertor · Launch Turba"]
+    CQ{"Pre-feasibility → ERG criterion"}
+    CR1120["Custom BCD1120 check"]
+    CR1190["Custom BCD1190 check"]
+    CS["LP5 update + second criterion pass"]
+    CT["CustomValvePointOptimize"]
+    CU["FillVari40 · Turba · CON rename · wheel chamber"]
+    CV["checkFinalTurbine — custom power closure"]
+
+    C0 --> C1 --> C2 --> C3 --> C4 --> C5 --> C6 --> C7 --> C8 --> C9 --> CQ
+    CQ -->|BCD1120| CR1120 --> CS
+    CQ -->|BCD1190| CR1190 --> CS
+    CS --> CT --> CU --> CV
+  end
+```
+
+#### Custom path — sub-charts (DAT rebuild, PSO, ERG choice, closure)
+
+**Sub-chart CST-A — `PrepareDatFile(mxlp)` inside custom (DAT surgery)**
+
+```mermaid
+flowchart TD
+  P0["PrepareDatFile mxlp"]
+  P1["LoadDatFile"]
+  P2["LoadLP1FromDat"]
+  P3["DeleteRowAfterFirstLoadPoint normalize block"]
+  P4["DeleteLoadPoints"]
+  P5["InsertLoadPointsWithExactFormattingUsingMid"]
+  P6["Update ND total Lps"]
+  P7["DatFileInitParamsExceptLP"]
+  P8["InsertSwallowLoadPoint"]
+  P0 --> P1 --> P2 --> P3 --> P4 --> P5 --> P6 --> P7 --> P8
+```
+
+**Sub-chart CST-B — After DAT is ready BCD rewrite + optimizer**
+
+```mermaid
+flowchart LR
+  BCD["BCD_UPDATE mxlp"] --> PSO["InvokeTurbineDesigner PSO"]
+  PSO --> E0["ERG_CUSTOM_BASE_CHECKS"]
+  E0 --> TC["TurnaConvert"]
+```
+
+**Sub-chart CST-C — ERG-derived feedback into DAT**
+
+```mermaid
+flowchart TD
+  UC["UpdatePunConvertor"]
+  RD["Read RDEHN from ERG stages"]
+  N5["Next005 round up steps of 0.05"]
+  WR["Rewrite matching DAT stage rows Save"]
+  UC --> RD --> N5 --> WR
+```
+
+**Sub-chart CST-D — Criterion split after Turba restart**
+
+```mermaid
+flowchart TD
+  X["Fresh Turba run after ERG_CUSTOM_BASE_CHECKS chain"]
+  Q{"Pre-feasibility outcome"}
+  Q -->|BCD1120 path| Z1["Custom BCD1120 ERG checker"]
+  Q -->|BCD1190 path| Z2["Custom BCD1190 ERG checker"]
+  Z1 --> LP["Update LP5 + second criterion pass"]
+  Z2 --> LP
+  LP --> VV["CustomValvePointOptimize"]
+```
+
+**Sub-chart CST-E — Last mile to power**
+
+```mermaid
+flowchart TD
+  FV["FillVari40"]
+  TB["LaunchTurba"]
+  CF["Finalize CON rename"]
+  FW["Wheel chamber pressure"]
+  FT["checkFinalTurbine"]
+  FV --> TB --> CF --> FW --> FT
+```
+
+### Additional load points flowchart (overview)
+
+Symbols (`Pr/T/M/P/E`), `fillLPINDat`, `MainTemp`, and Kreisl merge loops are spelled out in **[§9](#9-flow-wise-content-additional-load-points-path)**.
+
+```mermaid
+flowchart TD
+  subgraph ALP["Additional load points"]
+    direction TB
+    A0["Entry: CustomLoadPointHandler.cxLP_mainKreisl(customerLPList) — src/AdditionalLoadPoints.cs"]
+    A1["checkingPartLoadExist · snapshot LP map"]
+    A2["RefreshKreislDAT · fillLPINDat for LP1 into KREISL.DAT"]
+    A3["Back-fill zeros from KREISL.ERG · SortCustomerLoadPointsByVol"]
+    A4["Closed-cycle extras optional · FillInputDat"]
+    A5["HBD setup · ReferenceDATSelector(cxLP_RngStop + 10)"]
+    A6["cxLP_GenerateLoadPoints · prepareDATFile · LaunchTurba"]
+    A7["ERG pass · UpdateLP5 · ERG · ValvePointOptimize"]
+    A8["TURBA.CON · FillVari40 · RefreshKreislDAT"]
+    A9["Loop extra LPs fillAGainDat / fillLPAgain Pr T M P E"]
+    AA["Merge KREISL.DAT · UpdateDesupratorWithTurba if needed"]
+    AB["LaunchKreisl · CheckPower"]
+
+    A0 --> A1 --> A2 --> A3 --> A4 --> A5 --> A6 --> A7 --> A8 --> A9 --> AA --> AB
+  end
+```
+
+#### Additional load points — sub-charts (Kreisl LP1, mirrored standard block, per-LP merge)
+
+**Sub-chart ALP-A — Startup checks and snapshots**
+
+```mermaid
+flowchart TD
+  A["cxLP_mainKreisl customerLPList"]
+  B["checkingPartLoadExist"]
+  C["Snapshot initList + lpNumberToIndexMap"]
+  D["fillCustomerLoadPointList"]
+  A --> B --> C --> D
+```
+
+**Sub-chart ALP-B — Kreisl LP1 shaping (`fillLPINDat`) at a glance**
+
+```mermaid
+flowchart TD
+  F["fillLPINDat from CustomerLoadPoints index 1"]
+  G{"DeaeratorOutletTemp closed cycle"}
+  G -->|Yes| MK["Makeup condensate PST PRV DumpCondensor branches"]
+  G -->|No| H{"PST only"}
+  H -->|Yes| PSTW["Process steam optional desuperheater pressure"]
+  H -->|No| OP["Open cycle mass tie plus 0.055 vs exhaust"]
+  MK --> U["Unknown dimension ladder Pr T M P E Kreisl fills"]
+  PSTW --> U
+  OP --> U
+  U --> DC["Dump condenser optional capacity writes"]
+  DC --> MT["MainTemp append full KREISL.DAT"]
+```
+
+**Sub-chart ALP-C — Mirror of standard pipeline at scaled LP count (middle block)**
+
+```mermaid
+flowchart LR
+  R["ReferenceDATSelector cxLP_RngStop+10"] --> GL["cxLP_GenerateLoadPoints GenerateLoadPoints"]
+  GL --> PR["prepareDATFile"]
+  PR --> LT["LaunchTurba"]
+  LT --> ERG["ergResultsCheck UpdateLP5 ergResultsCheck"]
+  ERG --> VP["ValvePointOptimize"]
+  VP --> ST["CON FillVari40 RemoveErg RefreshKreislDAT"]
+  ST --> W["FillWheelChamberPressure from Turba LP1"]
+```
+
+**Sub-chart ALP-D — Loop over extra customer LPs (unknown dimension)**
+
+```mermaid
+flowchart TD
+  L["For each extra customer LP i"]
+  Q1{"i == 1"}
+  Q1 -->|Yes| FA["fillAGainDat index initList"]
+  Q1 -->|No| Q2{"Which field is zero SteamPressure SteamTemp SteamMass PowerGeneration ExhaustPressure"}
+  Q2 --> FPr["fillLPAgain Pr"]
+  Q2 --> FT["fillLPAgain T"]
+  Q2 --> FM["fillLPAgain M"]
+  Q2 --> FP["fillLPAgain P"]
+  Q2 --> FE["fillLPAgain E"]
+  FA --> NX["Append KREISL write continue"]
+  FPr --> NX
+  FT --> NX
+  FM --> NX
+  FP --> NX
+  FE --> NX
+  L --> Q1
+```
+
+**Sub-chart ALP-E — Closeout across cycles**
+
+```mermaid
+flowchart TD
+  DSR["Optional UpdateDesupratorWithTurba from TURBA ERG"]
+  LK["LaunchKreisl"]
+  CP["CheckPower"]
+  DSR --> LK --> CP
+```
+
+---
+
 ## 5) Flowchart - Standard path (starting section)
 
-Below is the current standard-path flowchart (shared and refined for documentation).  
-This is the first detailed flow section; executed/custom flows will be added next.
+> **Overview chart:** [Standard path flowchart](#standard-path-flowchart-overview) in the [flowcharts gallery](#flowcharts-gallery-all-automation-paths-overview).
+
+Below is the **detailed standard-path flowchart**, including Kreisl template selection (`RefreshKreislDAT`). Executed, custom, and additional-LP summaries are in the same gallery; **§7–§9** retain the full breakdowns.
 
 ```mermaid
 flowchart TD
@@ -436,6 +817,8 @@ This makes the pipeline robust to missing intermediate files and branch-dependen
 ---
 
 ## 7) Flow-wise content: Executed flow path
+
+> **Overview chart:** [Executed path flowchart](#executed-path-flowchart-overview) in the [flowcharts gallery](#flowcharts-gallery-all-automation-paths-overview).
 
 ### 7.1 Main executed flow (`MainExecutedClass.MainExecuted`)
 
@@ -876,6 +1259,8 @@ So the executed flow can end either as:
 ---
 
 ## 8) Flow-wise content: Custom flow path
+
+> **Overview chart:** [Custom path flowchart](#custom-path-flowchart-overview) in the [flowcharts gallery](#flowcharts-gallery-all-automation-paths-overview).
 
 ### 8.1 Main custom flow (`CustomExecutedClass.Main_CustomFlowPathTest`)
 
@@ -1633,6 +2018,8 @@ So in one sentence: this function is the **stage-data feedback updater that push
 
 ## 9) Flow-wise content: Additional load points path
 
+> **Overview chart:** [Additional load points flowchart](#additional-load-points-flowchart-overview) in the [flowcharts gallery](#flowcharts-gallery-all-automation-paths-overview).
+
 This path appears when the main flow has **more than one customer load point** to merge into Kreisl/Turba work (exact gate depends on caller: e.g. executed path checks `CustomerLoadPoints.Count > 2` in places; the idea is the same: **extra LPs beyond the base case**).
 
 Implementation lives mainly in `AdditionalLoadPoints.cs` (`CustomLoadPointHandler`), especially **`cxLP_mainKreisl(customerLPList)`**.
@@ -2060,9 +2447,66 @@ flowchart TD
 - `Custom` -> custom DAT + PSO + custom ERG criteria -> valve + final custom checks.
 - `Standard/Executed/Custom` + additional LP count -> `Additional Load Points LP-wise loop`.
 
+At-a-glance Mermaid diagrams for each branch: [Flowcharts gallery](#flowcharts-gallery-all-automation-paths-overview).
+
 ---
 
-## 11) Notes
+## 11) Code documentation — execution starting points
+
+This section maps **where execution actually starts in code** (types, files, and typical callers) so you can align the flowcharts with the repository. The UI host (Ignite X / MAUI) generally wires button or pipeline actions to these methods; search the solution for the method name to find every call site.
+
+### 11.1 Primary entry methods (by path)
+
+| Path | Type / method | File | Namespace | Role |
+|------|----------------|------|-----------|------|
+| **Standard (UI-style pipeline)** | `StartExec.Main4` | `src/Program.cs` | `StartExecutionMain` | Builds host, `RefreshKreislDAT`, `InitConfig`, HBD defaults, `DatFileSelector.ReferenceDATSelector`, Turba launch, ERG + valve + `PowerMatch`. |
+| **Standard (Kreisl-first orchestration)** | `StartKreisl.MainKreisL` | `src/kreisl.cs` | `StartKreislExecution` | Longer Kreisl-centric sequence: cleanup, template refresh, `FillClosestTurbineEfficiency`, Kreisl launches, `ReferenceDATSelector`, stabilization steps through `PowerMatch` (matches §5 top-level diagram). |
+| **Prefeasibility → branch** | `DatFileSelector.ReferenceDATSelector` | `src/core/HMBD/Ref_DAT_selector.cs` | `HMBD.Ref_DAT_selector` | After `fillPrefeasibilityDecisionChecks`, routes to standard template copy **or** `MainExecutedClass.GotoBCD1190(maxLp)` **or** cancellation when outside automated scope. Alternate path: `FlowPathSelector` in `Exec_Ref_DAT_Selector.cs` (`HMBD.Exec_Ref_DAT_Selector`) calls `MainExecuted(...)` under alternate pre-feasibility branches (includes `Throttle`). |
+| **Executed** | `MainExecutedClass.MainExecuted(criteria, maxLp)` | `src/Main_Executed.cs` | `StartExecutionMain` | Core executed pipeline; `GotoBCD1120` / `GotoBCD1190` delegate here with `BCD1120` / `BCD1190`. |
+| **Executed (shortcuts)** | `GotoBCD1120`, `GotoBCD1190` | `src/Main_Executed.cs` | `StartExecutionMain` | Public entry points used from `Ref_DAT_selector`, ERG checkers, and related classes. |
+| **Custom** | `CustomExecutedClass.Main_CustomFlowPathTest(mxlp)` | `src/Main_Custom.cs` | `StartExecutionMain` | Custom DAT, PSO, custom ERG checks, valve + `checkFinalTurbine`. Also reached from `MainExecutedClass` when criteria budgets exhaust (see `Main_Executed.cs` private handoff). |
+| **Additional load points** | `CustomLoadPointHandler.cxLP_mainKreisl(customerLPList)` | `src/AdditionalLoadPoints.cs` | `ExtraLoadPoints` | Kreisl DAT merge loop, Turba run, then per-LP unknown-dimension fills and final Kreisl + power check. |
+
+### 11.2 Dispatch diagram (conceptual — who calls whom)
+
+```mermaid
+flowchart LR
+  UI["Ignite X / TurbineDesignPage triggers"]
+  SP["StartExec.Main4"]
+  KR["StartKreisl.MainKreisL"]
+  REF["DatFileSelector.ReferenceDATSelector"]
+  PF["PreFeasibilityDataModel.fillPrefeasibilityDecisionChecks"]
+  ME["MainExecutedClass.MainExecuted"]
+  CU["CustomExecutedClass.Main_CustomFlowPathTest"]
+  LP["CustomLoadPointHandler.cxLP_mainKreisl"]
+
+  UI --> SP
+  UI --> KR
+  SP --> REF
+  KR --> REF
+  REF --> PF
+  PF -->|standard feasible| REF
+  PF -->|executed branch e.g. BCD1190| ME
+  ME -->|budget exhausted → custom handoff| CU
+  CU --> LP
+  SP --> LP
+  ME --> LP
+```
+
+Solid arrows are representative; actual wiring depends on the active page and LP count — use IDE **Find references** on each method name for exact callers.
+
+### 11.3 Supporting singletons / config loaded at startup
+
+- **`StartExec.InitConfig`** (`src/Program.cs`): fills nozzle, power-efficiency, pre-feasibility, load-point and Turba output models from Excel/backend data before `FillInputValues` updates Kreisl DAT fields.
+- **DI registration** (`StartExec.CreateHostBuilder`): `IThermodynamicLibrary`, `ILogger`, `IERGHandlerService` shared by Kreisl and standard paths.
+
+### 11.4 How to extend this documentation
+
+Later **method-by-method** chapters can cite: **caller → callee → condition → §flowchart subsection**. The gallery links **Standard → §5–§6**, **Executed → §7**, **Custom → §8**, **Additional LP → §9**.
+
+---
+
+## 12) Notes
 
 - If diagrams show as a `mermaid` **code block** instead of a picture, your editor preview is not rendering Mermaid (re-enable a **Markdown Mermaid** extension, or view this file on GitHub). A recent Cursor/VS Code or extension update can turn that off.
 - This README is code-logic first and intentionally flow-oriented.
