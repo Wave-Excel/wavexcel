@@ -1289,20 +1289,32 @@ Meaning:
 - the wheel chamber pressure is pushed back into the Kreisl-side files
 - `CheckPower()` is the final gate for executed success
 
-#### 7.10.1 `CorrectLP5Bending()` (executed power match) — easy purpose + flow
+#### 7.10.1 Inside `CheckPower(maxLp)`: `CorrectLP5Bending()` (executed) — easy purpose + flow
 
 `CorrectLP5Bending()` lives in `src/core/Checks/Exec_ERG_PowerMatch.cs` (class `ExecPowerMatch`).
 
 **What it is for (in simple words):**
 
-- LP5 is used as the “stress / correction” operating point (see **§7.8 UpdateLP5**).
+- This is part of the **`CheckPower(maxLp)` closure loop**. After no-load optimization, `CheckPower` looks at LP5 bending; if bending is reported it keeps trying repairs and re-running Turba.
+- LP5 is used as a “stress / correction” operating point (see **§7.8 UpdateLP5**).
 - After Turba runs, the ERG contains stage-wise **bending status flags** for LP5.
-- If any stage in LP5 reports a bending flag (**`F`** or **`B`**), this method **patches the blade table in the Turba DAT** (`TURBATURBAE1.DAT.DAT`) for the affected stage row(s), so the next Turba run is more likely to pass bending constraints.
+- If any stage in LP5 reports a bending flag (**`F`** or **`B`**), `CorrectLP5Bending()` **patches the blade table in the Turba DAT** (`TURBATURBAE1.DAT.DAT`) for the affected stage row(s), so the next Turba run is more likely to pass bending constraints.
 
 **Inputs / outputs:**
 
 - **Reads**: `C:\testDir\TURBATURBAE1.DAT.ERG`
 - **Writes**: `C:\testDir\TURBATURBAE1.DAT.DAT` (via `CorrectDatFileF(...)` / `CorrectDatFileB(...)`)
+
+**Where it sits in the `CheckPower` loop (very high-level):**
+
+```mermaid
+flowchart LR
+  A["CheckPower: NoLoadPowerOptimize"] --> B{"LP5 bending present?"}
+  B -->|Yes| C["UpdateLP5Power (optional)"]
+  C --> D["LaunchRsmin / read bending"]
+  D --> E["CorrectLP5Bending + LaunchTurba (repeat up to ~7)"]
+  B -->|No| OK["Continue thrust / final bending closure"]
+```
 
 **How it decides what to fix:**
 
@@ -2124,9 +2136,9 @@ So in one sentence: this function is the **stage-data feedback updater that push
 
 ---
 
-### 8.9 Custom power closure: `checkFinalTurbine` and `CorrectLP5Bending()` (easy spec)
+### 8.9 Custom power closure: `checkFinalTurbine` + `CustomPowerMatch.CheckPower()` + `CorrectLP5Bending()` (easy spec)
 
-The custom path closes by running **custom power match + final checks** (`checkFinalTurbine`). A key helper used during closure is **`CorrectLP5Bending()`**, implemented in `src/core/Checks/Cu_ERG_PowerMatch.cs` (class `CustomPowerMatch`).
+The custom path closes by running **custom power match + final checks** (`checkFinalTurbine`). Inside that closure, the code also uses `CustomPowerMatch.CheckPower(maxLp)` (from `src/core/Checks/Cu_ERG_PowerMatch.cs`). A key helper used *inside that power-match loop* is **`CorrectLP5Bending()`**.
 
 **What `CorrectLP5Bending()` does (same concept as executed, custom formatting):**
 
@@ -2140,6 +2152,17 @@ The custom path closes by running **custom power match + final checks** (`checkF
 
 - In custom flow, LP5 is again the “hard” point used to validate bending-sensitive behavior.
 - Instead of abandoning the run immediately on an LP5 bending flag, the code attempts a **deterministic DAT edit** to move the design toward a pass on the next Turba rerun.
+
+**Where it sits in the custom `CheckPower` loop (very high-level):**
+
+```mermaid
+flowchart LR
+  A["Custom CheckPower: NoLoadPowerOptimize"] --> B{"LP5 bending present?"}
+  B -->|Yes| C["UpdateLP5Power (optional)"]
+  C --> D["LaunchRsmin / read bending"]
+  D --> E["CorrectLP5Bending + LaunchTurba (repeat up to ~7)"]
+  B -->|No| OK["Continue thrust / final bending closure"]
+```
 
 **Custom vs executed differences you’ll see in code:**
 
