@@ -2823,6 +2823,420 @@ Solid arrows are representative; actual wiring depends on the active page and LP
 
 Later **method-by-method** chapters can cite: **caller → callee → condition → flowchart subsection**. The gallery links **Standard → Sections 5–6**, **Executed → Section 7**, **Custom → Section 8**, **Additional LP → Section 9**.
 
+### 11.5 End-to-end code walkthrough (by path)
+
+This section is the “**how the code actually runs**” narrative: **entry point → major calls → handoffs**. It is intentionally shorter than Sections 5–9 (which are diagram-heavy and method-deep).
+
+#### 11.5.1 Standard flow (two entry points)
+
+There are two common “standard” entry shapes:
+
+- **UI-style pipeline**: `StartExec.Main4(args)` in `src/Program.cs`
+- **Kreisl-first orchestration**: `StartKreisl.MainKreisL(args)` in `src/kreisl.cs`
+
+Both do the same *big idea*: **select template → run Kreisl/Turba → validate ERG → optimize valve → close power**. Details are in **Section 5 (flowchart)** and **Section 6 (theory)**.
+
+Call-tree sketch:
+
+- `StartExec.Main4`
+  - host + config
+  - `StartKreisl.DeleteCONFiles`
+  - `KreislDATHandler.RefreshKreislDAT` (template family selection)
+  - `InitConfig`
+  - `HBDPowerCalculator` defaults + init
+  - `DatFileSelector.ReferenceDATSelector`
+  - `LoadPointGen.GenerateLoadPoints`
+  - `DATFileProcessor.PrepareDATFile`
+  - `TurbaConfig.LaunchTurba`
+  - `ERGVerification.ErgResultsCheck`
+  - `ValvePointOptimizer.ValvePointOptimize`
+  - `PowerMatch.CheckPower`
+
+```mermaid
+flowchart TD
+  A["StartExec.Main4 / StartKreisl.MainKreisL"] --> B["RefreshKreislDAT (template selection)"]
+  B --> C["ReferenceDATSelector + GenerateLoadPoints + PrepareDATFile"]
+  C --> D["LaunchTurba + ERG checks"]
+  D --> E["ValvePointOptimize"]
+  E --> F["FillVari40 + rename CON + wheel pressure"]
+  F --> G["PowerMatch.CheckPower"]
+```
+
+#### 11.5.2 Executed flow (criteria controller)
+
+Executed flow is controlled by `MainExecutedClass` (`src/Main_Executed.cs`):
+
+- Entry methods:
+  - `GotoBCD1120(maxLp)` → calls `MainExecuted("BCD1120", maxLp)`
+  - `GotoBCD1190(maxLp)` → calls `MainExecuted("BCD1190", maxLp)`
+- Core method:
+  - `MainExecuted(criteria, maxLp)` where `criteria ∈ { BCD1120, BCD1190, Throttle }`
+
+High-level shape (details are in **Section 7**):
+
+- retry/fallback gates (budgets)
+- nearest executed project selection + executed reference DAT copy
+- executed LP generation + executed DAT rebuild
+- Turba run + ERG check pass 1
+- `UpdateLP5` + ERG check pass 2
+- valve optimization + stabilization
+- `CheckPower(maxLp)`
+- fallback handoffs:
+  - `BCD1120` budget exhausted → rerun as `BCD1190`
+  - `BCD1190` budget exhausted → `CustomExecutedClass.Main_CustomFlowPathTest(maxLp)`
+
+```mermaid
+flowchart TD
+  A["GotoBCD1120 / GotoBCD1190"] --> B["MainExecuted(criteria,maxLp)"]
+  B --> C["ReferenceDATSelectorExecuted + PrepareDATFileExecuted"]
+  C --> D["Turba + ERG check (pass 1)"]
+  D --> E["UpdateLP5"]
+  E --> F["Turba + ERG check (pass 2)"]
+  F --> G["Valve + stabilization"]
+  G --> H["CheckPower(maxLp)"]
+  H --> I{"Budgets exhausted?"}
+  I -->|BCD1120| BCD1190["Switch to BCD1190"]
+  I -->|BCD1190| CU["Custom flow"]
+```
+
+#### 11.5.3 Custom flow (PSO + custom checks)
+
+Custom flow entry is `CustomExecutedClass.Main_CustomFlowPathTest(mxlp)` in `src/Main_Custom.cs`.
+
+High-level shape (details are in **Section 8**):
+
+- cleanup + `RefreshKreislDAT`
+- generate custom LPs
+- pre-feasibility decisions
+- nearest custom params + custom reference DAT copy
+- custom DAT rebuild (`PrepareDatFile`)
+- BCD rewrite (`BCD_UPDATE`)
+- PSO optimizer loop (propose knobs → Turba → penalty checks → update particles)
+- base custom checks + DAT conversions (`TurnaConvert`, `UpdatePunConvertor`)
+- custom ERG criterion checks (1120 vs 1190), LP5 update + re-check
+- custom valve optimization + final closure (`checkFinalTurbine`)
+
+```mermaid
+flowchart TD
+  A["Main_CustomFlowPathTest(mxlp)"] --> B["GetNearestParams_Custom + PrepareDatFile + BCD_UPDATE"]
+  B --> C["InvokeTurbineDesigner (PSO)"]
+  C --> D["ERG_CUSTOM_BASE_CHECKS + DAT conversions"]
+  D --> E["Custom criterion checks + LP5 pass"]
+  E --> F["CustomValvePointOptimize + final closure (checkFinalTurbine)"]
+```
+
+#### 11.5.4 Additional load points flow (customer LP merge path)
+
+Additional-load-points entry is `CustomLoadPointHandler.cxLP_mainKreisl(customerLPList)` in `src/AdditionalLoadPoints.cs`.
+
+High-level shape (details are in **Section 9**):
+
+- **Phase 1**: write customer LP1 into `KREISL.DAT`, back-fill zeros from `KREISL.ERG`, sort by volumetric flow
+- **Phase 2**: run a **standard-mirror Turba stabilization** block (`ReferenceDATSelector → Turba → ERG → LP5 → valve`)
+- **Phase 3**: loop each extra customer LP and append/repair the Kreisl DAT text using `fillAGainDat` / `fillLPAgain(Pr/T/M/P/E)`
+- finalize: optional desuperheater update from Turba ERG, `LaunchKreisl`, then `CheckPower(...)`
+
+```mermaid
+flowchart TD
+  A["cxLP_mainKreisl(customerLPList)"] --> B["Phase 1: Kreisl LP prep + ERG backfill + sort"]
+  B --> C["Phase 2: Standard-mirror Turba stabilization"]
+  C --> D["Phase 3: Merge extra customer LPs into KREISL.DAT"]
+  D --> E["UpdateDesupratorWithTurba (if needed)"]
+  E --> F["LaunchKreisl + CheckPower"]
+```
+
+### 11.6 Code documentation (deeper): function-by-function walkthroughs
+
+This is the “**read the code in the same order it executes**” documentation. For each path, you get:
+
+- **function name** (exact method as in code)
+- **what it does**
+- **what it reads/writes (important files)**
+- **what it calls next**
+
+#### 11.6.1 Standard path (UI-style) — `StartExec.Main4(args)` in `src/Program.cs`
+
+Execution order (simplified but accurate to code):
+
+1. **`StartExec.CreateHostBuilder(args).Build()`**
+   - **does**: sets up DI container
+   - **provides**: `IThermodynamicLibrary`, `ILogger`, `IERGHandlerService`
+2. **Read config** (`src/core/Config/appsettings.json`) and set `excelPath`
+3. **`StartKreisl.FillGlobalHost()`** *(if needed)*
+   - **does**: ensures Kreisl-side host exists (Kreisl/Turba services available)
+4. **`StartKreisl.DeleteCONFiles()`**
+   - **does**: deletes old `.CON/.ERG` artifacts from `C:\testDir` and `C:\testDir\Turman250`
+5. **`new KreislDATHandler().RefreshKreislDAT()`**
+   - **does**: picks the correct Kreisl template family (open/PST vs closed/PRV/dump) and copies/updates the working Kreisl DAT
+   - **details**: see **Section 6.2** (template selection)
+6. **`StartExec.InitConfig()`**
+   - **does**: loads the Excel-backed models (`NozzleTurbaDataModel`, `PowerEfficiencyModel`, `PreFeasibilityDataModel`, `LoadPointDataModel`, `TurbaOutputModel`)
+   - **then calls**: `StartExec.FillInputValues()` which writes inlet/exhaust/mass into the working Kreisl DAT via `KreislDATHandler.Fill*`
+7. **`HBDPowerCalculator.HBDSetDefaultCustomerParams()`**
+   - **does**: seeds HMBD defaults for this run (customer parameters)
+8. **`DatFileSelector.ReferenceDATSelector()`**
+   - **does**: chooses the reference Turba DAT flowpath based on **pre-feasibility** decisions and copies it into working area
+   - **details**: see **Section 7.6** (executed selector) and **Section 6.0/6.4** (standard spine)
+9. **`LoadPointGen.GenerateLoadPoints()`**
+   - **does**: generates internal load points used by Turba DAT writing
+10. **`DATFileProcessor.PrepareDATFile()`**
+   - **does**: writes the generated load points + init parameters into `TURBATURBAE1.DAT.DAT`
+11. **`TurbaConfig.LaunchTurba()`**
+   - **does**: runs Turba.exe with the current DAT and produces `TURBATURBAE1.DAT.ERG` and `TURBATURBAE1.DAT.CON`
+12. **`ERGVerification.ErgResultsCheck()`**
+   - **does**: validates the Turba ERG outputs against engineering constraints (criterion checks, limits, etc.)
+13. **`ValvePointOptimizer.ValvePointOptimize()`**
+   - **does**: iteratively adjusts valve/nozzle group conditions to reduce deviation and improve convergence
+14. **`PowerMatch.CheckPower()`**
+   - **does**: final closure; includes no-load checks, bending/thrust checks, and repair loops (LP5 logic)
+   - **deep dive**: see **Section 7.10.1** (`CorrectLP5Bending` and DAT patchers)
+
+##### 11.6.1.1 Deeper: what each Standard step calls (mini call trees)
+
+Below, each block shows the **sub-functions / key helpers** called by that step in the current implementation.
+
+**A) `StartExec.CreateHostBuilder(args).Build()`**
+
+- `StartExec.CreateHostBuilder(args)`
+  - `.ConfigureServices(...)`
+    - `services.AddSingleton<IThermodynamicLibrary, ThermodynamicService>()`
+    - `services.AddSingleton<ILogger, Logger>()`
+    - `services.AddSingleton<IERGHandlerService, KreislERGHandlerService>()`
+
+**B) `StartKreisl.FillGlobalHost()` (if `StartKreisl.GlobalHost == null`)**
+
+- `StartKreisl.CreateHostBuilder(null).Build()`
+- reads `src/core/Config/appsettings.json` and sets `StartKreisl.excelPath`
+- assigns `StartExec.GlobalHost = StartKreisl.GlobalHost`
+
+**C) `StartKreisl.DeleteCONFiles()`**
+
+- deletes `*.CON` and `*.ERG` under:
+  - `C:\testDir`
+  - `C:\testDir\Turman250` *(if directory exists)*
+
+**D) `KreislDATHandler.RefreshKreislDAT()`**
+
+At a high level this method does:
+
+- reads cycle mode flags from `TurbineDataModel`:
+  - `DeaeratorOutletTemp`, `DumpCondensor`, `PST`, `ExhaustPressure`
+- may read `C:\testDir\KREISL.ERG` to extract `exhaustTemp` (`ExtractTempForDesuparator(...)`)
+- copies one template from `AppContext.BaseDirectory` into `C:\testDir\KREISL.DAT`
+- may call one of these converters:
+  - `UpdateTemplatePRVToWPRVInDumpCondensor(StartKreisl.filePath)`
+  - `UpdateTemplatePRVToWPRV(StartKreisl.filePath)`
+- sets `turbineDataModel.IsPRVTemplate` accordingly
+
+> This is exactly why Section 6.2 uses diagram labels like `T1/T2/T7` — the implementation is a nested decision tree.
+
+**E) `StartExec.InitConfig()`**
+
+- `NozzleTurbaDataModel.getInstance().fillNozzleTurbaDataModel()`
+- `PowerEfficiencyModel.getInstance().fillPowerEfficiencyDataModel()`
+- `PreFeasibilityDataModel.getInstance().fillPreFeasibilityData()`
+- `LoadPointDataModel.getInstance().fillLoadPoints()`
+- `TurbaOutputModel.getInstance().fillTurbaOutputDataList()`
+- sets:
+  - `turbineDataModel.GeneratorEfficiency = getGeneratorEff()`
+  - `turbineDataModel.LeakagePressure = 1.015`
+- calls **`StartExec.FillInputValues()`**
+  - `KreislDATHandler.FillMassFlow(StartKreisl.filePath, ...)`
+  - `KreislDATHandler.FillInletPressure(StartKreisl.filePath, ...)`
+  - `KreislDATHandler.FillExhaustPressure(StartKreisl.filePath, ...)`
+  - `KreislDATHandler.FillInletTemperature(StartKreisl.filePath, ...)`
+
+**F) `HBDPowerCalculator.HBDSetDefaultCustomerParams()`**
+
+- seeds default customer/HMBD parameters (implementation lives in `HMBDInformation` / HMBD configuration classes)
+- prepares the state used by efficiency/power persistence steps that follow
+
+**G) `DatFileSelector.ReferenceDATSelector()`**
+
+- `DatFileSelector.getFlowPath(maxLp)`
+  - `PreFeasibilityDataModel.fillPrefeasibilityDecisionChecks()`
+  - `SelectStandard("Straight", maxLp)` → sets `preFeasibilityDataModel.Variant`
+  - `CopyRefDATFile(path)` to copy the chosen `TURBATURBAE1.DAT.DAT` template into working location
+  - if standard not feasible:
+    - `MainExecutedClass.GotoBCD1190(maxLp)` OR `TurbineDesignPage.cts.Cancel()`
+
+**H) `LoadPointGen.GenerateLoadPoints()`**
+
+- `KreislIntegration.RenameTurbaCON()` (normalize CON name before using it)
+- fills `LoadPointDataModel.LoadPoints[1..]` from `TurbineDataModel` (pressure/temp/mass/backpressure/rpm/flags)
+- for MCR-style points, calls:
+  - `updateMainTemplate(...)`
+  - `KreislIntegration.LaunchKreisL()`
+  - `KreislERGHandlerService.ExtractMassFlowFromERGLP9(...)`
+  - then continues assembling remaining load points
+
+**I) `DATFileProcessor.PrepareDATFile()`**
+
+- `LoadLP1FromDAT()`
+- `DeleteRowAfterFirstLoadPoint()`
+- `InsertDataLineUnderFirstLPFixed()`
+- `DeleteLoadPoints()`
+- `InsertLoadPointsWithExactFormattingUsingMid(mxLPs)`
+- `InsertDataLineUnderND(totalLps)`
+- `DatFileInitParamsExceptLP()` (powertrain/nozzles/vari writes)
+  - `thermodynamicService.GetInletVelocity(...)`
+  - `thermodynamicService.getVolumetricFlow()`
+  - `updateGeneratorSpecs(...)` + `HBDPowerCalculator.HBDUpdateEffGenerator(...)`
+  - `updateGearboxSpecs(...)`, `updateTurbineSpecs(...)`, `updateVari27(...)`
+  - `updateNozzleSpecs(nozzleCount, nozzleFront)`
+
+**J) `TurbaConfig.LaunchTurba()`**
+
+- if `StartKreisl.kreislKey` and `C:\testDir\KREISL.CON` exists:
+  - moves it to `C:\testDir\KREISLTURBAE1.DAT.CON`
+- `RunBatchFile(AppContext.BaseDirectory\\auto.bat)` (starts Turba)
+- waits for `C:\testDir\TURBA_FLAG.bin`
+- on completion:
+  - `LoadERGFile(mxLPs)` → `ERGFileReader.LoadERGFile(mxLPs)` (populates `TurbaOutputModel`)
+- also scans `C:\testDir\TURBATURBAE1.DAT.LOG` for “Error in input file” and cancels if found
+
+**K) `ERGVerification.ErgResultsCheck()`**
+
+Runs a gate chain (stops early on first fail):
+
+- `ErgCheckExhaustVolumetricFlow(maxlPS)`
+- `ErgCheck_NozzlesSection(maxlPS)`
+  - calls `NozzleOptimizer.RuleEngineAlgorithmForNozzles(maxlPS)`
+- `ErgCheckDetaTGBCWheelChamberPTBending(maxlPS)`
+- `ErgCheckThrustValue(maxlPS)`
+  - calls `TurbaConfig.LaunchRsmin()` then checks thrust per LP
+- `ErgCheck_LoadPoints(maxlPS)`
+  - if stage pressure fails:
+    - uses `LoadPointGen.LoadPointGenerator_IncMassFlow(...)` / `LoadPointGenerator_ReduceBP(...)`
+    - `DATFileProcessor.PrepareDATFile_OnlyLPUpdate(maxLps)`
+    - `TurbaConfig.LaunchTurba(maxLps)` then re-enters `ErgResultsCheck`
+
+**L) `ValvePointOptimizer.ValvePointOptimize(maxLPs)`**
+
+- reads `TurbaOutputModel` deviation and nozzle-group valve status
+- calls one of:
+  - `AdjustNozzlePair(...)` → `NozzleOptimizer.UpdateNozzleSpecs(...)` → `TurbaConfig.LaunchTurba()` → re-run `ValvePointOptimize`
+  - `AdjustValvePointMassFlow(...)` → `PrepareDATFile_OnlyLPUpdate(...)` → `TurbaConfig.LaunchTurba()` loop until convergence
+
+**M) `PowerMatch.CheckPower(maxLP)`**
+
+- updates turbine efficiency back into Kreisl/HBD context (`HBDUpdateEffKriesl` / `HBDupdateEff`)
+- checks base power delta vs HBD
+- runs no-load / bending / thrust closure loops
+- includes LP5 bending repair path:
+  - `UpdateLP5Power(...)` *(when bending exists)*
+  - `TurbaConfig.LaunchRsmin()`
+  - `CorrectLP5Bending()` loop (DAT patchers)
+
+This closure logic is detailed in **Section 7.10.1** and **Section 8.9** (custom uses the same bending repair concept).
+
+#### 11.6.2 Standard path (Kreisl-first) — `StartKreisl.MainKreisL(args)` in `src/kreisl.cs`
+
+This is the same “standard idea” but explicitly **runs Kreisl early and resyncs**:
+
+- after `RefreshKreislDAT`, it calls:
+  - **`thermodynamicService.FillClosestTurbineEfficiency()`**
+  - **`hBDPowerCalculator.GetTurbaCON(ClosestProjectID)`**
+  - **`KreislIntegration.LaunchKreisL()`**
+  - then **`RefreshKreislDAT()` again + `InitConfig()` again** (select → run → resync)
+- then it enters the same main block:
+  - `ReferenceDATSelector → GenerateLoadPoints → PrepareDATFile → LaunchTurba → ERG pass 1 → UpdateLP5 → ERG pass 2 → ValvePointOptimize → FillVari40 → LaunchTurba → rename CON → FillWheelChamberPressure → PowerMatch.CheckPower`
+
+This is why Section 6.3 calls it **select → run → resync**.
+
+#### 11.6.3 Executed path — `MainExecutedClass.MainExecuted(criteria,maxLp)` in `src/Main_Executed.cs`
+
+Execution order:
+
+1. **Call counters / budgets**
+   - `mainCallCounters` for `BCD1120` / `BCD1190`
+   - `throttleCounters` for `Throttle` (hard cap `MAX_THROTTLE_CALLS`)
+   - **handoffs**:
+     - `BCD1120` budget exhausted → rerun as `BCD1190`
+     - `BCD1190` budget exhausted → call `Main_CustomFlowPathTest(maxLp)`
+2. **`CustomerInputHandler()`**
+   - **does**: reads customer inputs into runtime models
+3. **Executed HMBD defaults**
+   - `ExecHMBDConfiguration.HBDsetDefaultCustomerParamas_Executed*`
+4. **Nearest executed project selection**
+   - `PowerKNN(criteria)` → `MoveYAndSetParams()`
+5. **Reference executed DAT**
+   - `ReferenceDATSelectorExecuted(criteria)` (delegates to `execRefDATSelector.ReferenceDATSelectorExecuted(criteria)`)
+6. **Load and rebuild DAT**
+   - `LoadDatFile()`
+   - `GenerateLoadPoints(maxLp)`
+   - `PrepareDATFileExecuted(maxLp)`
+7. **Wheel chamber guard**
+   - `IsWheelChamberPressureValid()` → if false, rerun `MainExecuted(criteria,maxLp)` on next neighbor
+8. **Turba + ERG pass 1**
+   - `LaunchTurba(maxLp)`
+   - `ErgResultsCheckExecuted(criteria, false, maxLp)`
+9. **LP5 regeneration + ERG pass 2**
+   - `UpdateLP5()`
+   - `ErgResultsCheckExecuted(criteria, true, maxLp)`
+10. **Valve stabilize and close**
+    - `ValvePointOptimize(maxLp)`
+    - `FillVari40()`
+    - Turba re-run + rename CON + wheel pressure
+    - `CheckPower(maxLp)` (delegates to `ExecPowerMatch.CheckPower(maxLp)` in `src/core/Checks/Exec_ERG_PowerMatch.cs`)
+
+#### 11.6.4 Custom path — `CustomExecutedClass.Main_CustomFlowPathTest(mxlp)` in `src/Main_Custom.cs`
+
+Execution order (the major blocks you should follow in code):
+
+1. **Setup**
+   - `fillDependencies()`, `DeleteCONFiles()`, `RefreshKreislDAT()`
+   - `FillClosestTurbineEfficiency()`, `GetTurbaCON(ClosestProjectID)`, `FillInputValues()`
+2. **Generate custom load points**
+   - `CustomLoadPointGenerator.GenerateLoadPoints(mxlp)`
+3. **Pre-feasibility decision**
+   - `preFeasibilityDataModel.fillPrefeasibilityDecisionChecks()`
+4. **Seed nearest custom parameters + prepare custom reference DAT**
+   - `CustomDatFileHandler.GetNearestParams_Custom()`
+   - `CuPunConvertor.DeleteExecutedDat()`
+   - copy a baseline `10LP_TURBATURBAE1.DAT.DAT` into the custom repo and `CuFlowPathSelector.CopyRefDATFile(...)`
+5. **Build the custom working DAT**
+   - `CustomDATFileProcessor.PrepareDatFile(mxlp)`
+   - `CustomSaxaSaxi.BCD_UPDATE(mxlp)`
+6. **Optimize**
+   - `RelationshipAwarePSOOptimizer.InvokeTurbineDesigner()` (PSO loop; optionally Ollama-guided)
+7. **Base checks + conversions**
+   - `CustomERGCheck1120.ERG_CUSTOM_BASE_CHECKS()`
+   - `CuPunConvertor.TurnaConvert(mxlp)`
+   - `CuPunConvertor.UpdatePunConvertor()`
+8. **Custom criterion checks**
+   - branch to `ErgResultsCheckBCD1120_Custom` or `ErgResultsCheckBCD1190_Custom`, with LP5 re-check
+9. **Close**
+   - `customPowerMatch.checkFinalTurbine()` (uses `CustomPowerMatch.CheckPower(maxLp)`; see Section 8.9)
+
+#### 11.6.5 Additional load points — `CustomLoadPointHandler.cxLP_mainKreisl(customerLPList)` in `src/AdditionalLoadPoints.cs`
+
+This one is easiest to follow in the same three phases used in **Section 9.1.1**:
+
+1. **Kreisl-side LP preparation**
+   - `checkingPartLoadExist(customerLPList)` → sets `PowerGeneration` for part-load rows
+   - snapshot `initList` + `lpNumberToIndexMap`
+   - `DeleteCONFiles()` + `fillCustomerLoadPointList(customerLPList)`
+   - `RefreshKreislDAT()` + `cxLP_GetLPcount()` + `fillLPINDat()`
+   - back-fill missing values from `KREISL.ERG` and compute `VolFlow`
+   - `SortCustomerLoadPointsByVol()`
+   - closed-cycle extras: add capacity LP, PST default, bump `cxLP_RngStop`
+2. **Standard-mirror Turba stabilization**
+   - `ReferenceDATSelector(cxLP_RngStop + 10)`
+   - `cxLP_GenerateLoadPoints("Recal")` + `GenerateLoadPoints()`
+   - `prepareDATFile(cxLP_RngStop + 10)`
+   - `LaunchTurba(...)` + `ergResultsCheck(...)`
+   - `UpdateLP5()` + second `ergResultsCheck(...)`
+   - `ValvePointOptimize(...)`
+   - `FillVari40()` + `RefreshKreislDAT()` + wheel chamber pressure write-back
+3. **Merge extra customer LPs back into Kreisl**
+   - loop customer LPs:
+     - `i==1`: `fillAGainDat(index, initList)`
+     - else: choose missing dimension and call `fillLPAgain(index,"Pr/T/M/P/E",count,initList)`
+   - `File.WriteAllText("C:\\testDir\\KREISL.DAT", MainTemp)`
+   - if closed/PST: `UpdateDesupratorWithTurba(...)`
+   - `LaunchKreisL()` then `CheckPower(10 + cxLP_RngStop)`
+
 ---
 
 ## 12) Notes
