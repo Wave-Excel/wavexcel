@@ -1289,6 +1289,91 @@ Meaning:
 - the wheel chamber pressure is pushed back into the Kreisl-side files
 - `CheckPower()` is the final gate for executed success
 
+#### 7.10.0 Inside `ExecPowerMatch.CheckPower(maxLp)` (executed) — full closure flow
+
+`CheckPower(maxLp)` lives in `src/core/Checks/Exec_ERG_PowerMatch.cs` (class `ExecPowerMatch`). It is the **last “decision gate”** of the executed path: it tries to **close** on power, no-load, bending (LP5 repair), thrust, and “final bending across all LPs”. If it cannot close within the internal budgets, it **falls back** to the custom path (`Main_CustomFlowPathTest`).
+
+**What it uses (inputs):**
+
+- **From Turba**: `TurbaOutputModel.OutputDataList[...]` (LP1 power/efficiency, LP5 bending + thrust, etc.)
+- **From Kreisl/HBD**: `turbineDataModel.FinalPower` (target power), plus HMBD configuration defaults
+- **From file system**:
+  - `C:\testDir\AdminControl.csv` → `PowerMargin` (default 25 if missing)
+  - `C:\testDir\TURBATURBAE1.DAT.DAT` for generator/turbine/gearbox spec extraction + “AUS…” soft-check parameter edits
+
+**High-level phases in order (as implemented):**
+
+1. **Sync HMBD defaults and update efficiency**
+   - `ExecHMBDConfiguration.HBDSetDefaultCustomerParams()`
+   - reads **Efficiency** from Turba (`OutputDataList[1].Efficiency`)
+   - writes the efficiency back:
+     - if `StartKreisl.kreislKey`: `HBDUpdateEffKriesl(Efficiency, maxLp)` (Kreisl+Turba coupling rounds)
+     - else: `HBDupdateEff(Efficiency)`
+
+2. **Power match on LP1 vs HBD target**
+   - target power = `floor(turbineDataModel.FinalPower)` (assigned into `turbineDataModel.AK25`)
+   - compares against Turba LP1: `PowerLP1 = OutputDataList[1].Power_KW`
+   - considers “matched” if:
+     - `abs(targetPower - PowerLP1) <= getPowerMargin()` OR `targetPower <= PowerLP1`
+   - if not matched, it tries one “generator sync” round:
+     - `UpdateGeneratorinKriesl()` reads **generator/gearbox/turbine** powertrain specs from `TURBATURBAE1.DAT.DAT` and pushes them into Kreisl via `KreislDATHandler.updateGeneratorSpecs(...)`, `updateGearBoxPower(...)`, `updateTurbinePower(...)`
+     - `KreislIntegration.LaunchKreisL()` then re-extracts `AK25` from ERG
+     - if still not matched: logs failure and cancels
+
+3. **No-load optimization**
+   - `NoLoadPowerOptimize(maxLp)` delegates to `ExecNoLoadPowerOptimizer.NoLoadPowerOptimize(maxLp)`
+
+4. **LP5 bending loop (repair + re-run Turba)**
+   - reads bending from Turba: `OutputDataList[5].Bending`
+   - if bending exists:
+     - `UpdateLP5Power(maxLp)` modifies Kreisl LP5 template inputs and runs Kreisl+Turba to refresh the LP5 operating point
+     - sets `isLP5Change = true`
+   - then `TurbaAutomation.LaunchRsmin()` and starts a bounded loop:
+     - while LP5 bending still exists, up to **~7 iterations**:
+       - `CorrectLP5Bending()` patches the Turba DAT blade table (see **Section 7.10.1**)
+       - `TurbaAutomation.LaunchTurba(maxLp)` reruns Turba so the next ERG reflects the patch
+   - if bending still exists after the loop:
+     - falls back to custom: `CustomExecutedClass.Main_CustomFlowPathTest(maxLp)` and returns
+
+5. **Thrust loop (soft-check adjust “AUS…” parameter)**
+   - while `LP5.Thrust > ThrustLimit` **and** `getAUS() > 270`:
+     - `getAUS()` reads the value under the DAT label `!               AUSGLEICHSKOLBENDURCHMESSER`
+     - `UpdateDATSoftChecks(getAUS() + 1)` increments this parameter in `TURBATURBAE1.DAT.DAT`
+     - reruns `LaunchRsmin()` to re-evaluate thrust with the new soft-check value
+   - if thrust is still above limit after the loop:
+     - falls back to custom: `Main_CustomFlowPathTest(maxLp)` and returns
+
+6. **Final bending check across all load points**
+   - `checkFinalBending(maxLp)` scans all LPs (1..maxLoadPoints-1) and fails if **any** `OutputDataList[lp].Bending` is non-empty
+   - if passed:
+     - runs `LaunchRsmin()`, `UpdateOutletTempAndEnth()`, logs “turbine is good”, writes final power/efficiency, writes/load-points outputs, then cancels `finalToken` to end the run
+   - if failed:
+     - falls back to custom path again (then cancels)
+
+**Mini flow (executed `CheckPower`)**:
+
+```mermaid
+flowchart TD
+  A["Sync HMBD defaults + push Turba efficiency back (HBDupdateEff / HBDUpdateEffKriesl)"] --> B{"LP1 power within margin?"}
+  B -->|No| C["UpdateGeneratorinKriesl + LaunchKreisl + recompute target"] --> B2{"LP1 power within margin now?"}
+  B2 -->|No| FAIL1["Cancel: executed can't match base power"]
+  B2 -->|Yes| D
+  B -->|Yes| D["NoLoadPowerOptimize(maxLp)"]
+  D --> E{"LP5 bending present?"}
+  E -->|Yes| F["UpdateLP5Power (optional) + LaunchRsmin"]
+  F --> G["Loop <= ~7: CorrectLP5Bending + LaunchTurba"]
+  G --> H{"LP5 bending cleared?"}
+  H -->|No| CUSTOM1["Fallback to custom path"]
+  H -->|Yes| I["Thrust loop: while Thrust>Limit && AUS>270: AUS++ + LaunchRsmin"]
+  E -->|No| I
+  I --> J{"Thrust <= limit?"}
+  J -->|No| CUSTOM2["Fallback to custom path"]
+  J -->|Yes| K["checkFinalBending across all LPs"]
+  K --> L{"Any bending remains anywhere?"}
+  L -->|Yes| CUSTOM3["Fallback to custom path"]
+  L -->|No| OK["Success: log results + export/loadpoints + end run"]
+```
+
 #### 7.10.1 Inside `CheckPower(maxLp)`: `CorrectLP5Bending()` (executed) — easy purpose + flow
 
 `CorrectLP5Bending()` lives in `src/core/Checks/Exec_ERG_PowerMatch.cs` (class `ExecPowerMatch`).
