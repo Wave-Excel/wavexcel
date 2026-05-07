@@ -3146,39 +3146,114 @@ This is why Section 6.3 calls it **select → run → resync**.
 
 #### 11.6.3 Executed path — `MainExecutedClass.MainExecuted(criteria,maxLp)` in `src/Main_Executed.cs`
 
-Execution order:
+**Typical entry (outside this method)** — callers such as **`GotoBCD1120` / `GotoBCD1190`** invoke **`fillDependencies()`** first. That rebuilds **`MainExecutedClass.GlobalHost`**, fills lookup tables (`NozzleTurbaDataModel`, `ExecutedDB`, `PowerEfficiencyModel`, `PreFeasibilityDataModel`, etc.), reads **`AdminControl.csv`** for `GeneratorEff` and **`NoOfExecuted`**, resets logs, seeds **`ListPower`** from **`TurbineDataModel`** (notably row 0 = current case boundary conditions), then calls **`MainExecuted(...)`**.
+
+Execution order inside **`MainExecuted`**:
 
 1. **Call counters / budgets**
-   - `mainCallCounters` for `BCD1120` / `BCD1190`
-   - `throttleCounters` for `Throttle` (hard cap `MAX_THROTTLE_CALLS`)
-   - **handoffs**:
-     - `BCD1120` budget exhausted → rerun as `BCD1190`
-     - `BCD1190` budget exhausted → call `Main_CustomFlowPathTest(maxLp)`
+   - `mainCallCounters` for `BCD1120` / `BCD1190` — cap = **`turbineDataModel.NoOfExecuted`** (neighbor count budget)
+   - `throttleCounters` for **`Throttle`** — hard cap **`MAX_THROTTLE_CALLS`** (currently `2`); when exceeded the method **`return`**s *(the console prints “custom path” but **`Main_CustomFlowPathTest` is not invoked from this branch)*.
+   - **Handoffs**
+     - `BCD1120` budget exhausted → **`ResetCleanUpExecutedNearest()`** → **`MainExecuted("BCD1190", maxLp)`** (fresh attempt with broader neighbor pool rules on the BCD1190 path).
+     - `BCD1190` budget exhausted → **`Main_CustomFlowPathTest(maxLp)`** (custom executed flow).
+     - Successful counter increment also **`ResetNozzleCounter()`** and clears **`OldNa` / `OldNb`** on **`TurbineDataModel`**.
 2. **`CustomerInputHandler()`**
-   - **does**: reads customer inputs into runtime models
+   - **Current code**: stub (empty body); customer state is assumed to already live in **`TurbineDataModel`** / workbook-backed models populated earlier.
 3. **Executed HMBD defaults**
-   - `ExecHMBDConfiguration.HBDsetDefaultCustomerParamas_Executed*`
+   - **`ExecHMBDConfiguration`**: **`HBDsetDefaultCustomerParamas_Executed_Kreisl()`** if **`StartKreisl.kreislKey`**, else **`HBDsetDefaultCustomerParamas_Executed()`**
+   - Row 0 of **`ListPower`** has **`.Power = turbineDataModel.AK25`** before KNN runs (ties neighbors to target power axis).
 4. **Nearest executed project selection**
-   - `PowerKNN(criteria)` → `MoveYAndSetParams()`
+   - **`PowerKNN(criteria)`** → **`MoveYAndSetParams()`**
 5. **Reference executed DAT**
-   - `ReferenceDATSelectorExecuted(criteria)` (delegates to `execRefDATSelector.ReferenceDATSelectorExecuted(criteria)`)
+   - **`ReferenceDATSelectorExecuted(criteria)`** → **`FlowPathSelector.ReferenceDATSelectorExecuted`** in `src/core/HMBD/Exec_Ref_DAT_Selector.cs`.
 6. **Load and rebuild DAT**
-   - `LoadDatFile()`
-   - `GenerateLoadPoints(maxLp)`
-   - `PrepareDATFileExecuted(maxLp)`
+   - **`LoadDatFile()`** reads working **`TURBATURBAE1.DAT.DAT`** into **`turbineDataModel.DAT_DATA`** (needed for RADKAMMER / parameter scrape).
+   - **`GenerateLoadPoints(maxLp)`** then **`HBDsetDefaultCustomerParamsExecuted(kreislKey)`** — second pass on executed HMBD defaults after LP generation starts.
+   - **`HBDupdateEfficiency`** copies **`ListPower[0].Efficiency`** into **`turbineDataModel.TurbineEfficiency`**.
+   - **`PrepareDATFileExecuted(maxLp)`**
 7. **Wheel chamber guard**
-   - `IsWheelChamberPressureValid()` → if false, rerun `MainExecuted(criteria,maxLp)` on next neighbor
+   - **`IsWheelChamberPressureValid()`** compares **`RADKAMMER`** from in-memory **`DAT_DATA`**, **`PreFeasibilityDataModel`** inlet/back-pressure against engineering limits; **if false**, logs and **recursively calls `MainExecuted(criteria, maxLp)`** so **`MoveYAndSetParams`** can advance to another neighbor (**`FlowPathSelector.AddOrMoveY`** side effects).
 8. **Turba + ERG pass 1**
-   - `LaunchTurba(maxLp)`
-   - `ErgResultsCheckExecuted(criteria, false, maxLp)`
+   - **`LaunchTurba(maxLp)`** — **`TurbaAutomation.LaunchTurba`** in `src/core/Turba/Exec_TurbaConfig.cs` (moves **`KREISL.CON`** → **`KREISLTURBAE1.DAT.CON`** when present, runs batch, loads ERG into **`TurbaOutputModel`**).
+   - **`ErgResultsCheckExecuted(criteria, false, maxLp)`** — **`isLP5Update` / `isCheckingLP5` = false**: first-pass checks without “LP5 already refreshed” semantics.
 9. **LP5 regeneration + ERG pass 2**
-   - `UpdateLP5()`
-   - `ErgResultsCheckExecuted(criteria, true, maxLp)`
-10. **Valve stabilize and close**
-    - `ValvePointOptimize(maxLp)`
-    - `FillVari40()`
-    - Turba re-run + rename CON + wheel pressure
-    - `CheckPower(maxLp)` (delegates to `ExecPowerMatch.CheckPower(maxLp)` in `src/core/Checks/Exec_ERG_PowerMatch.cs`)
+   - **`MainExecutedClass.UpdateLP5()`** (static): recomputes LP index **5** from current **`TurbineDataModel`** inlet / exhaust / mass (superheat-based offset, half exhaust back-pressure, etc.).
+   - **`ResetNozzleCounter()`** between passes clears executed nozzle optimizer iteration state.
+   - **`ErgResultsCheckExecuted(criteria, true, maxLp)`**
+10. **`ResetNozzleCounter()`** again, then valve + Kreisl coupling + power closure
+    - **`ValvePointOptimize(maxLp)`** — **`ExecValvePointOptimizer`** (executed nozzle + mass-flow iteration; see subsection below).
+    - **`KreislDATHandler.FillVari40()`** — writes Kreisl coupling line into **`TURBATURBAE1.DAT.DAT`** (Vari 40) so Kreisl-aware runs stay consistent with Turba DAT.
+    - **`TurbaAutomation.LaunchTurba(maxLp)`** — second Turba run after coupling line.
+    - **Optional extra-Kreisl path** *(only when **`AdditionalLoadPoint.GetInstance().CustomerLoadPoints.Count > 2`**)*: may **`RenameTurbaCON`**, **`RemoveErg`**, **`RefreshKreislDAT`**, **`FillWheelChamberPressure`**, append multi-LP **`KREISL.DAT`** fragments via **`fillAGainDat` / `fillLPAgain`**, optional **`UpdateDesupratorWithTurba`**, then **`LaunchKreisL()`**.
+    - **Always afterward**: read wheel chamber pressure from **`TurbaOutputModel`**, **`KreislIntegration.RenameTurbaCON("...\Turman250\TURBATURBAE1.DAT.CON", "...\TURBA.CON")`**, **`KreislDATHandler.FillWheelChamberPressure(StartKreisl.filePath, "1 0", wheelChamberP)`**.
+    - **`CheckPower(maxLp)`** → **`ExecPowerMatch.CheckPower`** in **`src/core/Checks/Exec_ERG_PowerMatch.cs`** (**Section 7.10.1** — **`CorrectLP5Bending`** and related loops).
+
+##### 11.6.3.1 Deeper: what each Executed step calls (mini call trees)
+
+Same idea as **Section 11.6.1.1**, but for the executed stack and files.
+
+**A) `PowerKNN.ExecutePowerKNN(criteria)`** (`src/core/HMBD/Exec_Power_KNN.cs`)
+
+- Reads **`AppSettings:ExcelFilePath`** workbook sheets **`PowerDB`**, **`PowerNormDB`**, **`PowerNearest`**.
+- Normalizes the current case from **`turbineDataModel.ListPower[0]`** (pressure, temperature, mass, exhaust pressure).
+- Filters historical rows by **`criteria`**:
+  - **`BCD1120`**: normalized column 8 in band **1120–1130**
+  - **`BCD1190`**: band **1190–1210**
+  - **`Throttle`**: column 9 text **`Throttle`** (and caps **`k`** at **2** when **`k > 2`**)
+- Sorts Euclidean distance in normalized space, fills **`ListPower[0..k-1]`** with denormalized neighbor steam conditions + efficiency + project metadata.
+
+**B) `MoveYAndSetParams()`** → **`FlowPathSelector.MoveYAndSetParams`**
+
+- **`AddOrMoveY()`** — manipulates which row in **`ListPower`** is marked **`KNearest = "Y"`** (neighbor rotation / “try next” bookkeeping; uses **`MainExecutedClass.row`** when higher-efficiency solve flag is on).
+- **`UpdateHBDParamsExecuted(updatedRow)`** — **`ExecHMBDConfiguration.UpdateHBDParamsExecuted`** copies the selected neighbor’s parameters into the HMBD / turbine model context for the rest of the run.
+
+**C) `ReferenceDATSelectorExecuted(criteria)`**
+
+- **`GetFlowPathExecuted(criteria)`**
+  - sets **`turbineDataModel.TurbineStatus = criteria`**
+  - **`SelectExecutedFlowPath(criteria)`** walks **`ListPower`** for the row with **`KNearest == "Y"`**, resolves **`ProjectName`** against **`ExecutedDB.ExecutedProjectDB`**, sets **`ClosestProjectID`**, **`ClosestProjectName`**, **`DatFilePath`**, returns repository **`.DAT`** path string.
+  - **`CopyRefDATFile(path)`** — verifies file readiness, copies into **`C:\testDir\`**, renames to **`TURBATURBAE1.DAT.DAT`**, **`UpdateHeaderOrderUserDate`** (order / user / date line).
+
+**D) `LoadDatFile()` + `GenerateLoadPoints(maxLp)` + `PrepareDATFileExecuted(maxLp)`**
+
+- **`ExecutedDATFileProcessor.LoadDatFile()`** — reads **`C:\testDir\TURBATURBAE1.DAT.DAT`** → **`turbineDataModel.DAT_DATA`**.
+- **`ExecLoadPointGenerator.GenerateLoadPoints(maxLp)`** — builds the same style of internal LP table as standard (base, backpressure variants, temperature offset, MCR-style points, etc.); may touch **`KREISL.DAT`** snapshot (`mainTemp`), **`KreislDATHandler`** RPM init when **`StartKreisl.kreislKey`**, deletes stray **`TURBA.CON`**.
+- **`PrepareDATFileExecuted`** — **`ExecutedDATFileProcessor.PrepareDatFileExecuted`**
+  - **`LoadLP1FromDat`**, **`DeleteRowAfterFirstLoadPoint`**, **`InsertDataLineUnderFirstLPFixed`**, **`DeleteLoadPoints`**, **`InsertLoadPointsWithExactFormattingUsingMid`**, **`InsertDataLineUnderND`**
+  - **`DatFileInitParamsExceptLPExecuted()`** — executed variant of powertrain / nozzle / vari writes (uses **`thermodynamicService.GetInletVelocity`**, **`getVolumetricFlow`**, **`PowerEfficiencyModel`**, generator/gearbox/turbine update helpers — same family as standard **`DatFileInitParamsExceptLP`** but in **`Exec_DAT_Handler.cs`**).
+
+**E) `IsWheelChamberPressureValid()`**
+
+- **`GetParam_RADKAMMER()`** parses **`RADKAMMER`** from **`turbineDataModel.DAT_DATA`**
+- Compares against **`PreFeasibilityDataModel.InletPressureActualValue`** / **`BackpressureActualValue`**:
+  - invalid if **`RADKAMMER < backPressure`** OR **`RADKAMMER > 0.8 * inletPressure`**
+
+**F) `ErgResultsCheckExecuted(criteria, isLP5Update, maxLp)`**
+
+- Sets the appropriate static flag then dispatches:
+  - **`BCD1120`** → **`ERG_BCD1120.isCheckingLP5 = isLP5Update`** → **`ErgResultsCheckBCD1120(maxLp)`**
+    - Gate chain (order in code): exhaust volumetric → **nozzles (`ExecutedNozzleOptimizer.RuleEngineAlgorithmForNozzles`)** → thrust → delta-T / GBC / wheel / bending → **`ErgResultsCheckBCD1120New`**
+    - Failure paths often recurse **`MainExecuted("BCD1190", maxLp)`** or **`ResetCleanUpExecutedNearest()`** then hand off.
+  - **`BCD1190`** → **`ERG_BCD1190.isLP5Update = isLP5Update`** → **`ErgResultsCheckBCD1190(maxLp)`**
+    - Gate chain: **`ErgCheckExhaust1190`** (exhaust curves / delta-T bands) → nozzles → thrust → delta-T / GBC / wheel / bending → **`ErgResultsCheckBCD1190New`**
+    - Failed exhaust / neighbor exhaustion paths call **`MainExecuted("BCD1190", maxLp)`** again.
+  - **`Throttle`** → **`ERGResultsChecker.ERGResultsCheckThrottle()`** (throttle-specific ERG gate file).
+
+**G) `MainExecutedClass.UpdateLP5()`** (static)
+
+- Uses **`IThermodynamicLibrary.tsatvonp(InletPressure)`** to derive a superheat offset pattern, then overwrites **`LoadPointDataModel.LoadPoints[5]`** fields (pressure, temp, mass, back-pressure, rpm, flags) from **`TurbineDataModel`**.
+
+**H) `ExecValvePointOptimizer.ValvePointOptimize(maxLp)`**
+
+- Reads **`TurbaOutputModel`** LP1 and LP6 **`ABWEICHUNG`** and LP6 nozzle group state.
+- If already within **0–0.5%**, returns.
+- Otherwise **`AdjustNozzlePair`** → **`ExecutedNozzleOptimizer.UpdateNozzleSpecs`** → **`TurbaAutomation.LaunchTurba`** → recursive **`ValvePointOptimize`**, or **`AdjustValvePointMassFlow`** loop:
+  - **`PrepareDatFileOnlyLPUpdate`** → **`TurbaAutomation.LaunchTurba`** until deviation sign / step-size convergence.
+
+**I) Post-valve: `FillVari40` → Turba → (optional multi-custom-LP Kreisl) → CON rename → wheel pressure → `ExecPowerMatch.CheckPower`**
+
+- **`FillVari40`** / **`FillWheelChamberPressure`** touch **`C:\testDir\TURBATURBAE1.DAT.DAT`** and **`StartKreisl.filePath`** (**`KREISL.DAT`**).
+- **`ExecPowerMatch.CheckPower`**: executed power closure, including **`CorrectLP5Bending`** paths documented under **Section 7.10.1**.
 
 #### 11.6.4 Custom path — `CustomExecutedClass.Main_CustomFlowPathTest(mxlp)` in `src/Main_Custom.cs`
 
