@@ -3111,6 +3111,13 @@ Runs a gate chain (stops early on first fail):
     - `DATFileProcessor.PrepareDATFile_OnlyLPUpdate(maxLps)`
     - `TurbaConfig.LaunchTurba(maxLps)` then re-enters `ErgResultsCheck`
 
+**Where the LP5 “regen + re-check” happens (Standard)**:
+
+- In the standard pipelines, this gate chain is run in **two passes**:
+  - **Pass 1**: run Turba → run `ERGVerification.ErgResultsCheck()` on the initial load-point set.
+  - **Update LP5**: `UpdateLP5()` rewrites LP5 (stress/bending/thrust-oriented point) from the latest turbine state.
+  - **Pass 2**: re-run Turba → re-run `ERGVerification.ErgResultsCheck()` again so the same gates (especially bending/thrust-related checks) validate the **new LP5** as well.
+
 **L) `ValvePointOptimizer.ValvePointOptimize(maxLPs)`**
 
 - reads `TurbaOutputModel` deviation and nozzle-group valve status
@@ -3225,6 +3232,11 @@ Same idea as **Section 11.6.1.1**, but for the executed stack and files.
   - invalid if **`RADKAMMER < backPressure`** OR **`RADKAMMER > 0.8 * inletPressure`**
 
 **F) `ErgResultsCheckExecuted(criteria, isLP5Update, maxLp)`**
+
+- **Called twice in the executed pipeline** (see Section 11.6.3 execution order):
+  - **Pass 1**: after the first `LaunchTurba(maxLp)`, call `ErgResultsCheckExecuted(criteria, false, maxLp)`.
+  - **Update LP5**: `MainExecutedClass.UpdateLP5()` rewrites LP5 (index 5) to a regenerated “stress” point.
+  - **Pass 2**: call `ErgResultsCheckExecuted(criteria, true, maxLp)` to re-validate ERG gates after LP5 changed.
 
 - Sets the appropriate static flag then dispatches:
   - **`BCD1120`** → **`ERG_BCD1120.isCheckingLP5 = isLP5Update`** → **`ErgResultsCheckBCD1120(maxLp)`**
