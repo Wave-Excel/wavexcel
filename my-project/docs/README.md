@@ -3159,7 +3159,6 @@ Execution order inside **`MainExecuted`**:
      - Successful counter increment also **`ResetNozzleCounter()`** and clears **`OldNa` / `OldNb`** on **`TurbineDataModel`**.
 2. **Executed HMBD defaults**
    - **`ExecHMBDConfiguration`**: **`HBDsetDefaultCustomerParamas_Executed_Kreisl()`** if **`StartKreisl.kreislKey`**, else **`HBDsetDefaultCustomerParamas_Executed()`**
-   - Row 0 of **`ListPower`** has **`.Power = turbineDataModel.AK25`** before KNN runs (ties neighbors to target power axis).
 3. **Nearest executed project selection**
    - **`PowerKNN(criteria)`** → **`MoveYAndSetParams()`**
 4. **Reference executed DAT**
@@ -3193,13 +3192,12 @@ Same idea as **Section 11.6.1.1**, but for the executed stack and files.
 **A) `PowerKNN.ExecutePowerKNN(criteria)`** (`src/core/HMBD/Exec_Power_KNN.cs`)
 
 - Reads **`AppSettings:ExcelFilePath`** workbook sheets **`PowerDB`**, **`PowerNormDB`**, **`PowerNearest`**.
-- Normalizes the current case from **`turbineDataModel.ListPower[0]`** (pressure, temperature, mass, exhaust pressure).
+- Normalizes the current case (pressure, temperature, mass, exhaust pressure).
 - Filters historical rows by **`criteria`**:
   - **`BCD1120`**: normalized column 8 in band **1120–1130**
   - **`BCD1190`**: band **1190–1210**
   - **`Throttle`**: column 9 text **`Throttle`** (and caps **`k`** at **2** when **`k > 2`**)
-- Sorts Euclidean distance in normalized space, fills **`ListPower[0..k-1]`** with denormalized neighbor steam conditions + efficiency + project metadata.
-
+  
 **B) `MoveYAndSetParams()`** → **`FlowPathSelector.MoveYAndSetParams`**
 
 - **`AddOrMoveY()`** — manipulates which row in **`ListPower`** is marked **`KNearest = "Y"`** (neighbor rotation / “try next” bookkeeping; uses **`MainExecutedClass.row`** when higher-efficiency solve flag is on).
