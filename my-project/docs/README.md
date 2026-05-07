@@ -3377,6 +3377,96 @@ Execution order (the major blocks you should follow in code):
 9. **Close**
    - `customPowerMatch.checkFinalTurbine()` (uses `CustomPowerMatch.CheckPower(maxLp)`; see Section 8.9)
 
+##### 11.6.4.1 Deeper: what each Custom step calls (mini call trees)
+
+Below is the same “mini call tree” style as **Section 11.6.1.1** (standard) and **Section 11.6.3.1** (executed), but for the **custom** pipeline.
+
+**A) Setup and Kreisl bootstrap** (`src/Main_Custom.cs`)
+
+- `CustomExecutedClass.fillDependencies()`
+  - builds `CustomExecutedClass.GlobalHost` (`CreateHostBuilder` adds `IThermodynamicLibrary`, `ILogger`, `IERGHandlerService`)
+  - assigns the same host to `MainExecutedClass.GlobalHost`, `StartKreisl.GlobalHost`, `StartExec.GlobalHost`
+  - fills models: `NozzleTurbaDataModel`, `ExecutedDB`, `PowerEfficiencyModel`, `PreFeasibilityDataModel`, `LoadPointDataModel`, `TurbaOutputModel`
+  - seeds `TurbineDataModel.ListPower[0]` with the current case boundary conditions and `KNearest = NoOfExecuted`
+- `CustomExecutedClass.DeleteCONFiles()` deletes `*.CON` and `*.ERG` under `C:\testDir` (and `C:\testDir\Turman250` if present)
+- `KreislDATHandler.RefreshKreislDAT()` selects and copies the correct Kreisl template into `C:\testDir\KREISL.DAT`
+- `thermodynamicService.FillClosestTurbineEfficiency()` primes “closest efficiency” lookup for the initial Kreisl/HBD seed
+- `CustomHMBDConfiguration.GetTurbaCON(ClosestProjectID)` pulls a starting Turba CON context for the nearest executed project
+- `CustomExecutedClass.FillInputValues()` writes inlet/exhaust and cycle extras into `KREISL.DAT` (deaerator / PST / dump-condenser variants)
+  - note: the method is called twice in `Main_CustomFlowPathTest` with a `RefreshKreislDAT()` between them (a “refresh then refill” pattern)
+
+**B) Generate custom load points** (`src/core/HMBD/Custom_LoadPointGenerator.cs`)
+
+- `CustomLoadPointGenerator.GenerateLoadPoints(mxlp)`
+  - builds `LoadPointDataModel.LoadPoints[...]` for the custom run
+  - is followed by another `customHMBDConfiguration.HBDSetDefaultCustomerParamsKreisL()` call in `Main_CustomFlowPathTest`
+
+**C) Decide which custom criterion gates apply**
+
+- `preFeasibilityDataModel.fillPrefeasibilityDecisionChecks()`
+- `Decision == TRUE` ⇒ treat as **BCD1120 custom** checks
+- `Decision_2 == TRUE` ⇒ treat as **BCD1190 custom** checks
+
+**D) Seed custom “nearest params” and create a working custom DAT**
+
+- `CustomDatFileHandler.GetNearestParams_Custom()` (`src/core/Handlers/Custom_DAT_Handler.cs`)
+  - pulls a nearest custom seed (geometry/starting nozzle parameters) into runtime models used later by PSO and custom DAT writing
+- `CuPunConvertor.DeleteExecutedDat()` (`src/core/HMBD/Cu_Pun_Convertor.cs`)
+  - clears out executed artifacts so the custom path starts from its own baseline
+- baseline DAT copy:
+  - copies `AppContext.BaseDirectory\\10LP_TURBATURBAE1.DAT.DAT` into `C:\testDir\projects_repository\custom_flowPaths\`
+  - `CuFlowPathSelector.CopyRefDATFile(...)` (`src/core/HMBD/Cu_Ref_DAT_Selector.cs`) normalizes it into `C:\testDir\TURBATURBAE1.DAT.DAT`
+
+**E) Build the custom DAT + apply SAXA/SAXI initial updates**
+
+- `CustomDATFileProcessor.PrepareDatFile(mxlp)` (`src/core/Handlers/Custom_DAT_Handler.cs`)
+  - writes LP blocks + base parameters into `TURBATURBAE1.DAT.DAT` (custom variant of the standard DAT preparation flow)
+- `CustomSaxaSaxi.BCD_UPDATE(mxlp)` (`src/core/Checks/Cu_Saxa_Saxi.cs` / `src/core/Checks/SAXA_SAXI`)
+  - applies BCD-specific SAXA/SAXI updates before optimization
+
+**F) PSO-based optimization (and optional Ollama guidance)** (`src/core/Optimizers/Cu_PSOFlowPathOptimizerNozzle.cs`)
+
+- `RelationshipAwarePSOOptimizer.InvokeTurbineDesigner()`
+  - iteratively perturbs nozzle/geometry parameters (particle swarm) and evaluates a penalty score (`PenaltyScoreCalculator`)
+  - repeatedly runs Turba through `CuTurbaAutomation.LaunchTurba(...)` to score candidates
+  - mode switch is controlled via `AppSettings:UseOllamaGuidedNozzle` (logs which mode is active)
+
+**G) Conversion and custom Turba run**
+
+- `CustomERGCheck1120.ERG_CUSTOM_BASE_CHECKS()` (`src/core/Checks/Cu_ERG_BCD_1120.cs`)
+  - custom “sanity gate” checks before the full criterion chain
+- `CuPunConvertor.TurnaConvert(mxlp)` then `CuPunConvertor.UpdatePunConvertor()`
+  - converts / rewrites steam-path related data before continuing
+- `CuTurbaAutomation.LaunchTurba(mxlp)` (`src/core/Turba/Cu_TurbaConfig.cs`)
+  - runs Turba, waits for `TURBA_FLAG.bin`, loads ERG into `TurbaOutputModel`
+
+**H) Two-pass custom ERG checks (LP5 regen + re-check), then valve optimization**
+
+- **Pass 1** (LP5 not yet regenerated):
+  - if `Decision==TRUE`: `CustomERGCheck1120.isCheckingLP5=false` → `ErgResultsCheckBCD1120_Custom(mxlp)` (`src/core/Checks/Cu_ERG_BCD_1120.cs`)
+  - else if `Decision_2==TRUE`: `CustomERGCheck1190.isCheckingLP5=false` → `ErgResultsCheckBCD1190_Custom(mxlp)` (`src/core/Checks/Cu_ERG_BCD_1190.cs`)
+- `ResetNozzleCounter()` resets `CustomNozzleOptimizer` iteration state
+- `UpdateLP5(mxlp)` (static in `src/Main_Custom.cs`)
+  - recomputes LP5 (index 5) as the regenerated “stress” point and calls `CustomDATFileProcessor.PrepareDatFileOnlyLPUpdate(maxlp)` to rewrite only LP blocks
+- **Pass 2** (validate again with regenerated LP5):
+  - repeats the same checker, but with `isCheckingLP5=true`
+- `CustomValvePointOptimizer.ValvePointOptimize(mxlp)` (`src/core/Optimizers/Cu_ERG_ValvePointOptimizer.cs`)
+  - same structure as executed/standard: adjust nozzle pairs or adjust LP6 mass-flow, re-run Turba until the valve-point deviation converges
+
+**I) Close: Vari40 + Turba + Kreisl coupling + custom power match + final fixes**
+
+- `KreislDATHandler.FillVari40()` then `CuTurbaAutomation.LaunchTurba(mxlp)`
+- `KreislIntegration.RenameTurbaCON("...\\Turman250\\TURBATURBAE1.DAT.CON", "...\\TURBA.CON")`
+- if `AdditionalLoadPoint.CustomerLoadPoints.Count > 2`:
+  - performs the same “merge extra LPs back into Kreisl” block as executed (rebuild `KREISL.DAT` with `fillAGainDat` / `fillLPAgain`, optional desuperheater updates, then `LaunchKreisL()`)
+- always: `FillWheelChamberPressure(...)` back into Kreisl-side DAT (`KREISL.DAT`)
+- `CustomPowerMatch.CheckPower(mxlp)` (`src/core/Checks/Cu_ERG_PowerMatch.cs`)
+  - custom power closure (includes `CorrectLP5Bending()` concept as documented in **Section 8.9**)
+- post-closure cleanup/fixes:
+  - `customERGCheck1120.ERG_CUSTOM_TURNA_CHECKS()`
+  - `customSaxaSaxi.SAXA_FIX()`
+  - final Turba run + `customPowerMatch.checkFinalTurbine()`
+
 #### 11.6.5 Additional load points — `CustomLoadPointHandler.cxLP_mainKreisl(customerLPList)` in `src/AdditionalLoadPoints.cs`
 
 This one is easiest to follow in the same three phases used in **Section 9.1.1**:
