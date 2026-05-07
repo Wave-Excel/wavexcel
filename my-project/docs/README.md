@@ -3157,30 +3157,28 @@ Execution order inside **`MainExecuted`**:
      - `BCD1120` budget exhausted → **`ResetCleanUpExecutedNearest()`** → **`MainExecuted("BCD1190", maxLp)`** (fresh attempt with broader neighbor pool rules on the BCD1190 path).
      - `BCD1190` budget exhausted → **`Main_CustomFlowPathTest(maxLp)`** (custom executed flow).
      - Successful counter increment also **`ResetNozzleCounter()`** and clears **`OldNa` / `OldNb`** on **`TurbineDataModel`**.
-2. **`CustomerInputHandler()`**
-   - **Current code**: stub (empty body); customer state is assumed to already live in **`TurbineDataModel`** / workbook-backed models populated earlier.
-3. **Executed HMBD defaults**
+2. **Executed HMBD defaults**
    - **`ExecHMBDConfiguration`**: **`HBDsetDefaultCustomerParamas_Executed_Kreisl()`** if **`StartKreisl.kreislKey`**, else **`HBDsetDefaultCustomerParamas_Executed()`**
    - Row 0 of **`ListPower`** has **`.Power = turbineDataModel.AK25`** before KNN runs (ties neighbors to target power axis).
-4. **Nearest executed project selection**
+3. **Nearest executed project selection**
    - **`PowerKNN(criteria)`** → **`MoveYAndSetParams()`**
-5. **Reference executed DAT**
+4. **Reference executed DAT**
    - **`ReferenceDATSelectorExecuted(criteria)`** → **`FlowPathSelector.ReferenceDATSelectorExecuted`** in `src/core/HMBD/Exec_Ref_DAT_Selector.cs`.
-6. **Load and rebuild DAT**
+5. **Load and rebuild DAT**
    - **`LoadDatFile()`** reads working **`TURBATURBAE1.DAT.DAT`** into **`turbineDataModel.DAT_DATA`** (needed for RADKAMMER / parameter scrape).
    - **`GenerateLoadPoints(maxLp)`** then **`HBDsetDefaultCustomerParamsExecuted(kreislKey)`** — second pass on executed HMBD defaults after LP generation starts.
    - **`HBDupdateEfficiency`** copies **`ListPower[0].Efficiency`** into **`turbineDataModel.TurbineEfficiency`**.
    - **`PrepareDATFileExecuted(maxLp)`**
-7. **Wheel chamber guard**
+6. **Wheel chamber guard**
    - **`IsWheelChamberPressureValid()`** compares **`RADKAMMER`** from in-memory **`DAT_DATA`**, **`PreFeasibilityDataModel`** inlet/back-pressure against engineering limits; **if false**, logs and **recursively calls `MainExecuted(criteria, maxLp)`** so **`MoveYAndSetParams`** can advance to another neighbor (**`FlowPathSelector.AddOrMoveY`** side effects).
-8. **Turba + ERG pass 1**
+7. **Turba + ERG pass 1**
    - **`LaunchTurba(maxLp)`** — **`TurbaAutomation.LaunchTurba`** in `src/core/Turba/Exec_TurbaConfig.cs` (moves **`KREISL.CON`** → **`KREISLTURBAE1.DAT.CON`** when present, runs batch, loads ERG into **`TurbaOutputModel`**).
    - **`ErgResultsCheckExecuted(criteria, false, maxLp)`** — **`isLP5Update` / `isCheckingLP5` = false**: first-pass checks without “LP5 already refreshed” semantics.
-9. **LP5 regeneration + ERG pass 2**
+8. **LP5 regeneration + ERG pass 2**
    - **`MainExecutedClass.UpdateLP5()`** (static): recomputes LP index **5** from current **`TurbineDataModel`** inlet / exhaust / mass (superheat-based offset, half exhaust back-pressure, etc.).
    - **`ResetNozzleCounter()`** between passes clears executed nozzle optimizer iteration state.
    - **`ErgResultsCheckExecuted(criteria, true, maxLp)`**
-10. **`ResetNozzleCounter()`** again, then valve + Kreisl coupling + power closure
+9. **`ResetNozzleCounter()`** again, then valve + Kreisl coupling + power closure
     - **`ValvePointOptimize(maxLp)`** — **`ExecValvePointOptimizer`** (executed nozzle + mass-flow iteration; see subsection below).
     - **`KreislDATHandler.FillVari40()`** — writes Kreisl coupling line into **`TURBATURBAE1.DAT.DAT`** (Vari 40) so Kreisl-aware runs stay consistent with Turba DAT.
     - **`TurbaAutomation.LaunchTurba(maxLp)`** — second Turba run after coupling line.
