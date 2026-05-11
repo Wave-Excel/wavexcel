@@ -1763,7 +1763,7 @@ So `BCD_UPDATE(mxlp)` is not a full optimization stage by itself. It is a **targ
 
 ### 8.6 `pSOFlowPathOptimizerNozzle.InvokeTurbineDesigner()` in-depth flow and purpose
 
-This is the **main custom nozzle optimization function** in the custom flow.
+This is the **main custom nozzle optimization function** in the custom flow. The current implementation uses **relationship-aware PSO only** (`InvokeTurbineDesigner` → `PSOLoop` in `Cu_PSOFlowPathOptimizerNozzle.cs`).
 
 In simple terms, it tries many combinations of five DAT parameters, runs Turba for each combination, rejects combinations that violate engineering rules, keeps the best feasible one, and then does a final refinement pass.
 
@@ -1780,9 +1780,7 @@ The five optimized parameters are:
 ```mermaid
 flowchart TD
   A["InvokeTurbineDesigner()"]
-  B{"Use Ollama-guided mode?"}
-  C["InvokeOllamaGuidedOptimizer()"]
-  D["Load relationship table and start PSO loop"]
+  D["Relationship table already loaded"]
   E["Initialize particles and parameter bounds"]
   F["For each iteration: evaluate all particles"]
   G["Update particles using PSO + relationship guidance"]
@@ -1793,9 +1791,7 @@ flowchart TD
   L["Keep best feasible parameter set"]
   M["Optimization output ready for next custom-flow stage"]
 
-  A --> B
-  B -->|Yes| C --> M
-  B -->|No| D --> E --> F --> G --> H
+  A --> D --> E --> F --> G --> H
   H -->|Continue| F
   H -->|Stop / converged| I
   I --> J --> K --> L --> M
@@ -1803,10 +1799,8 @@ flowchart TD
 
 #### 8.6.2 What this function is doing, step by step
 
-1. **Choose optimization mode**
-   - `InvokeTurbineDesigner()` first checks `AppSettings:UseOllamaGuidedNozzle`.
-   - If it is enabled, the function switches to `InvokeOllamaGuidedOptimizer()`.
-   - Otherwise it runs the default **relationship-aware PSO** path.
+1. **Start the relationship-aware PSO path**
+   - `InvokeTurbineDesigner()` runs **only** this path: it logs the loaded engineering relationships and calls **`PSOLoop()`** (see `Cu_PSOFlowPathOptimizerNozzle.cs`). There is no alternate “LLM-guided” branch in this entry point.
 
 2. **Initialize optimization search space**
    - `InitializeParameterBounds()` creates min/max/step values for `B, R, D, I, A`.
@@ -3367,7 +3361,7 @@ Execution order (the major blocks you should follow in code):
    - `CustomDATFileProcessor.PrepareDatFile(mxlp)`
    - `CustomSaxaSaxi.BCD_UPDATE(mxlp)`
 6. **Optimize**
-   - `RelationshipAwarePSOOptimizer.InvokeTurbineDesigner()` (PSO loop; optionally Ollama-guided)
+   - `RelationshipAwarePSOOptimizer.InvokeTurbineDesigner()` (relationship-aware PSO only; see **Section 8.6**)
 7. **Base checks + conversions**
    - `CustomERGCheck1120.ERG_CUSTOM_BASE_CHECKS()`
    - `CuPunConvertor.TurnaConvert(mxlp)`
@@ -3424,12 +3418,11 @@ Below is the same “mini call tree” style as **Section 11.6.1.1** (standard) 
 - `CustomSaxaSaxi.BCD_UPDATE(mxlp)` (`src/core/Checks/Cu_Saxa_Saxi.cs` / `src/core/Checks/SAXA_SAXI`)
   - applies BCD-specific SAXA/SAXI updates before optimization
 
-**F) PSO-based optimization (and optional Ollama guidance)** (`src/core/Optimizers/Cu_PSOFlowPathOptimizerNozzle.cs`)
+**F) PSO-based optimization** (`src/core/Optimizers/Cu_PSOFlowPathOptimizerNozzle.cs`)
 
 - `RelationshipAwarePSOOptimizer.InvokeTurbineDesigner()`
-  - iteratively perturbs nozzle/geometry parameters (particle swarm) and evaluates a penalty score (`PenaltyScoreCalculator`)
-  - repeatedly runs Turba through `CuTurbaAutomation.LaunchTurba(...)` to score candidates
-  - mode switch is controlled via `AppSettings:UseOllamaGuidedNozzle` (logs which mode is active)
+  - entry point runs **only** `PSOLoop()` (relationship-aware particle swarm—see **Section 8.6**)
+  - each candidate updates the DAT soft checks, runs Turba via `CuTurbaAutomation`, and scores feasibility with `PenaltyScoreCalculator`
 
 **G) Conversion and custom Turba run**
 
