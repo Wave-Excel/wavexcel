@@ -2500,6 +2500,39 @@ flowchart TD
 
 Open-cycle mass-flow tie-up (when neither deaerator nor PST): if mass is unknown but exhaust mass is known, code uses **`SteamMass = 0.055 + ExhaustMassFlow`**; if mass is known but exhaust mass is not, **`ExhaustMassFlow = SteamMass - 0.055`**.
 
+### 9.2.1 Easy terms: `fillAGainDat` and `fillLPAgain` (additional load points only)
+
+These two functions run **after** Turba has been stabilized. Their job is to **grow one big Kreisl input file** by pasting **one extra operating case at a time** into a string called **`MainTemp`**. At the end of the loop, the code does **`File.WriteAllText("C:\\testDir\\KREISL.DAT", MainTemp)`** — so think of **`MainTemp`** as **“all the Kreisl LP snippets glued together”**.
+
+**`fillAGainDat(i, initList)` — used for the *first* extra customer LP in the merge loop (`i == 1` in `cxLP_mainKreisl`)**
+
+- **In one sentence:** “Take the customer row at index `i` in our frozen copy `initList`, patch the **current** `KREISL.DAT` on disk with closed-cycle / PST / open-cycle helpers, then **append the whole file** to `MainTemp`.”
+- **Why it exists:** The first appended block is handled like a **full LP rebuild** on the live Kreisl file (makeup temps, PRV/dump paths, desuperheater pressure, then the same kind of **which number is missing?** ladder as LP1: pressure vs temp vs mass vs power vs exhaust pressure).
+- **Not magic:** It edits **`StartKreisl.filePath`** (your Kreisl DAT), then does **`MainTemp += File.ReadAllText(KREISL.DAT)`** so that slice becomes part of the final merged file.
+
+**`fillLPAgain(i, unk, count, initList)` — used for *later* extra LPs when **one** quantity is still unknown**
+
+- **In one sentence:** “Drop in a **small blank row template** for Kreisl load point number `count`, fill in everything we **already know** from `initList[i]`, and use **dummy / sweep values** only for the **one** missing quantity `unk` so Kreisl can run.”
+- **Steps (always the same idea):**
+  1. Pick a template file (`loadPoint.dat`, or a closed-cycle / PST variant) based on plant mode.
+  2. Copy it to `KREISL.DAT`, replace the placeholder **`lp`** with the real LP index **`count`**.
+  3. Call `KreislDATHandler` helpers to write mass, pressures, temperatures, power, dump-condenser bits, etc.
+  4. Append **`MainTemp += read KREISL.DAT`** again.
+
+**What `unk` means (plain English)**
+
+| Code | Meaning | What the code is doing in practice |
+| --- | --- | --- |
+| **`Pr`** | Inlet **pressure** was left blank (0). | Writes mass, exhaust pressure, temperature, power from the customer row, but **inlet pressure is stepped** (placeholder `0` then a high value like `42.981`) so Kreisl has a solvable setup. |
+| **`T`** | Inlet **temperature** was blank. | Keeps pressure/mass/exhaust; **temperature is stepped** (`0` then a high value like `440`) so Kreisl can find a consistent state. |
+| **`M`** | **Mass flow** was blank. | Sets known P/T/exhaust; uses **mass placeholders** (often tied to exhaust mass in dump-condenser cases) so Kreisl can close the balance. |
+| **`P`** | **Generator power** was blank. | Keeps steam conditions; adjusts **power / dump-condenser mass paths** so the case is still valid for Kreisl. |
+| **`E`** | **Exhaust pressure** was blank. | Keeps inlet side; **exhaust pressure is stepped** (`0` then a value like `4.59`) so Kreisl has a back-pressure target. |
+
+After the `unk`-specific block, both functions may still apply **deaerator / PST / PRV template** patches (same family as elsewhere), then **`MainTemp`** grows by one more **`KREISL.DAT`** snapshot.
+
+For **diagram-level** detail of branches, keep reading **Section 9.8** (`fillLPAgain`) and **Section 9.9** (`fillAGainDat`).
+
 ### 9.3 LP1 into Kreisl (`fillLPINDat`)
 
 Before the ERG fill loop, **`fillLPINDat()`** writes customer LP1 boundary conditions into **`KREISL.DAT`** via `KreislDATHandler` (pressure, temperature, mass flow, power, exhaust pressure, closed-cycle makeup/condensate/PST/PRV branches, dump condenser capacity paths). It accumulates working text in **`MainTemp`** (often by appending the current `KREISL.DAT` file after edits).
@@ -2659,6 +2692,8 @@ flowchart TD
 
 ### 9.8 Inner flow: `fillLPAgain(i, unk, count, initList)`
 
+> **Easy read first:** see **Section 9.2.1** for what this function does in plain language and what **`Pr` / `T` / `M` / `P` / `E`** mean.
+
 Used when **LP index `i` is not the first** extra LP and one dimension is still unknown (`unk` is **`Pr`**, **`T`**, **`M`**, **`P`**, or **`E`**). It picks a **row template file**, stamps the Kreisl LP row id, then writes boundary guesses into **`KREISL.DAT`** via `KreislDATHandler`, and appends the updated file into **`MainTemp`**.
 
 #### 9.8.1 Choose LP row template (`dat` path)
@@ -2716,6 +2751,8 @@ flowchart TD
 ```
 
 ### 9.9 Inner flow: `fillAGainDat(i, initList)`
+
+> **Easy read first:** see **Section 9.2.1** for what this function does in plain language (first extra LP in the merge loop).
 
 Same physical idea as **`fillLPINDat`**, but for **customer index `i` inside `initList`** when rebuilding the **first** extra LP block (`i == 1` path in `cxLP_mainKreisl`). It:
 
