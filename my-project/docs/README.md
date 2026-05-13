@@ -3493,6 +3493,7 @@ This one is easiest to follow in the same three phases used in **Section 9.1.1**
 ## 12) Notes
 
 - If diagrams show as a `mermaid` **code block** instead of a picture, your editor preview is not rendering Mermaid (re-enable a **Markdown Mermaid** extension, or view this file on GitHub). A recent Cursor/VS Code or extension update can turn that off.
+- **PDF export (Mermaid renders as diagrams):** from folder `my-project/docs`, run `npm install` then `npm run pdf`. This writes `README.pdf` next to this file (loads Mermaid 11 from a CDN, then prints via headless Chromium). First run downloads Puppeteer’s browser; Internet access is required. Diagram scale is capped in `docs/scripts/render-readme-pdf.mjs` (`max-height` on SVG and compact `flowchart` spacing); increase those values if diagrams look too small.
 - This README is code-logic first and intentionally flow-oriented.
 - Keep terminology as in code where possible (`DumpCondensor`, `DeaeratorOutletTemp`, `IsPRVTemplate`) to avoid mismatch.
 - Extend each section with diagrams and method-level call mapping as documentation evolves.
