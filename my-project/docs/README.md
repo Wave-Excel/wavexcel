@@ -933,7 +933,7 @@ The executed flow sequence is:
 9. run ERG checks by criteria (`ErgResultsCheckExecuted(criteria, false)`),
 10. update LP5 and re-check ERG (`UpdateLP5`, `ErgResultsCheckExecuted(criteria, true)`),
 11. valve optimization (`ValvePointOptimize`),
-12. final final sync steps:
+12. final stabilization:
     - `FillVari40`
     - Turba re-launch
     - rename `TURBATURBAE1.DAT.CON` -> `TURBA.CON`
@@ -1015,7 +1015,7 @@ flowchart TD
   T2 -->|No| OK
 ```
 
-### 7.5 `MainExecuted(criteria, maxLp)` what it does (detailed flow)
+### 7.5 `MainExecuted(criteria, maxLp)` in-depth flow and purpose
 
 This is the **main controller** for the executed flow path.
 
@@ -1028,7 +1028,7 @@ In simple terms, it:
 5. applies criterion-specific ERG checks,
 6. updates LP5 and checks again,
 7. optimizes valve behavior,
-8. performs final final sync steps and power matching,
+8. performs final stabilization and power matching,
 9. falls back to the next path if the current executed path cannot close.
 
 #### 7.5.1 Easy overall picture
@@ -1051,7 +1051,7 @@ flowchart TD
   N["UpdateLP5()"]
   O["ErgResultsCheckExecuted(criteria, true)"]
   P["ValvePointOptimize(maxLp)"]
-  Q["Final sync steps: FillVari40 + Turba + TURBA.CON + wheel pressure"]
+  Q["Final stabilization: FillVari40 + Turba + TURBA.CON + wheel pressure"]
   R["CheckPower(maxLp)"]
   S["Additional load points / Kreisl merge if needed"]
 
@@ -1073,10 +1073,10 @@ Before the executed calculation starts, `MainExecuted()` checks whether the curr
 Behavior:
 
 - if the criterion is `Throttle` and the retry limit is exceeded, the method returns and effectively gives up on the throttle-executed path
-- if `BCD1120` exceeds its allowed neighbor/call budget, the flow resets state and switches to `BCD1190`
+- if `BCD1120` exceeds its allowed neighbor/call budget, the flow resets state and hands off to `BCD1190`
 - if `BCD1190` exceeds its budget, the flow moves to `Main_CustomFlowPathTest(maxLp)`
 
-This method does more than run the steps: it **controls when the executed path retries or switches to another path**.
+So this method is not just a run pipeline. It is also the **gatekeeper for executed-path retry and fallback policy**.
 
 #### 7.5.3 Main executed setup phase
 
@@ -1100,7 +1100,7 @@ Once the criterion is accepted, the method performs the executed-run setup:
 
 This means the executed flow first establishes the **nearest known project context**, then rewrites that selected DAT around the current request.
 
-### 7.6 `ReferenceDATSelectorExecuted(criteria)` what it does (detailed flow)
+### 7.6 `ReferenceDATSelectorExecuted(criteria)` in-depth flow and purpose
 
 This step is the executed-flow **reference project selector**.
 
@@ -1142,7 +1142,7 @@ What it really does:
 
 So this is the step that converts “nearest executed project” into an actual working DAT file.
 
-### 7.7 `PrepareDATFileExecuted(maxLp)` what it does (detailed flow)
+### 7.7 `PrepareDATFileExecuted(maxLp)` in-depth flow and purpose
 
 This method is the executed-flow **DAT reconstruction step**.
 
@@ -1174,7 +1174,7 @@ Important meaning:
 
 So this is the executed equivalent of the custom DAT rebuild step.
 
-### 7.8 `UpdateLP5()` what it does (detailed flow)
+### 7.8 `UpdateLP5()` in-depth flow and purpose
 
 This method regenerates the special LP5 case before the second ERG pass.
 
@@ -1215,7 +1215,7 @@ Why it matters:
 
 So `UpdateLP5()` is the executed flow’s **second-pass stress/correction load-point generator**.
 
-### 7.9 `ErgResultsCheckExecuted(criteria, isLP5Update, maxLp)` what it does (detailed flow)
+### 7.9 `ErgResultsCheckExecuted(criteria, isLP5Update, maxLp)` in-depth flow and purpose
 
 This method **picks which ERG checks** to run for the executed path.
 
@@ -1300,9 +1300,9 @@ If load-point pressure checks fail:
 
 So throttle behaves like a smaller executed branch with its own repair loop.
 
-### 7.10 `ValvePointOptimize(maxLp)` and final final sync steps
+### 7.10 `ValvePointOptimize(maxLp)` and final stabilization
 
-After both ERG passes complete, the executed flow enters the final executed final sync steps block.
+After both ERG passes complete, the executed flow enters the final executed stabilization block.
 
 Sequence:
 
@@ -1335,7 +1335,7 @@ Meaning:
 
 #### 7.10.0 Inside `ExecPowerMatch.CheckPower(maxLp)` (executed) — full closure flow
 
-`CheckPower(maxLp)` lives in `src/core/Checks/Exec_ERG_PowerMatch.cs` (class `ExecPowerMatch`). It is the **last main check** of the executed path: it tries to **close** on power, no-load, bending (LP5 repair), thrust, and “final bending across all LPs”. If it cannot close within its retry limits, it **falls back** to the custom path (`Main_CustomFlowPathTest`).
+`CheckPower(maxLp)` lives in `src/core/Checks/Exec_ERG_PowerMatch.cs` (class `ExecPowerMatch`). It is the **last “decision gate”** of the executed path: it tries to **close** on power, no-load, bending (LP5 repair), thrust, and “final bending across all LPs”. If it cannot close within the internal budgets, it **falls back** to the custom path (`Main_CustomFlowPathTest`).
 
 **What it uses (inputs):**
 
