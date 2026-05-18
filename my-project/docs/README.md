@@ -1,9 +1,29 @@
 # SST-200 Back-Pressure Turbine Automation - Code Documentation
 
-This documentation explains the code logic for the SST-200 turbine automation pipeline in a flow-wise format.  
-It is intended as a living document, so more sections can be added progressively for each flow path and sub-flow.
+This guide explains how the SST-200 turbine automation code works, step by step.  
+We add new sections over time as more flow paths are documented.
+
+### Contents
+
+| Section | Topic |
+|--------|--------|
+| [1](#1-what-this-code-does) | What the code does |
+| [2](#2-main-flow-path-first-top-level) | Main routes (standard, executed, custom, extra load points) |
+| [3](#3-hmbd-logic-families-used-in-code) | HMBD open vs closed cycle rules |
+| [4](#4-code-locations-quick-map) | Where to find key files |
+| [Flowcharts gallery](#flowcharts-gallery-all-automation-paths-overview) | Overview diagrams for all paths |
+| [5](#5-flowchart-standard-path-starting-section) | Standard path (detailed flowchart) |
+| [6](#6-theory-walkthrough-explain-the-full-standard-flowchart) | Standard path in plain language |
+| [7](#7-flow-wise-content-executed-flow-path) | Executed path |
+| [8](#8-flow-wise-content-custom-flow-path) | Custom path |
+| [9](#9-flow-wise-content-additional-load-points-path) | Additional load points |
+| [10](#10-complete-flow-map-all-paths) | How all paths fit together |
+| [11](#11-code-documentation-execution-starting-points) | Where execution starts in code |
+| [12](#12-notes) | Notes and PDF export |
 
 ---
+
+<a id="1-what-this-code-does"></a>
 
 ## 1) What this code does
 
@@ -17,37 +37,43 @@ This codebase automates core engineering tasks that are usually manual in SST-20
 - validating final power match,
 - producing HMBD-aligned output behavior (open/closed variants).
 
-The objective is to reduce repetitive manual work, keep calculations consistent, and shorten turnaround time.
+The goal is to cut down repetitive manual work, keep results consistent, and finish jobs faster.
 
 ---
 
+<a id="2-main-flow-path-first-top-level"></a>
+
 ## 2) Main flow path first (top-level)
 
-The code follows one top-level dispatch path, then branches into sub-flows:
+The program starts from one main entry point, then splits into separate flows:
 
 1. **Main flow path (entry)**
-   - `Program` -> `StartExec.Main4(...)` for standard path.
+   - `StartExec.Main4(...)` in `src/Program.cs` for the shorter standard path.
    - `MainExecutedClass.GotoBCD1120()` / `GotoBCD1190()` for executed path.
    - `CustomExecutedClass.Main_CustomFlowPathTest()` for custom path (direct or fallback).
 
-2. **Standard flow path**
-   - Base automation flow (`StartExec.Main4`) with template selection + Turba + ERG + valve + power match.
+2. **Standard flow path** (two entries — see Section 11.5.1)
+   - **`StartExec.Main4`**: template → Turba → **one** ERG pass → valve → power (no Kreisl launch, no `UpdateLP5`).
+   - **`StartKreisl.MainKreisL`**: Kreisl launches, **two** ERG passes with `UpdateLP5`, valve, then Turba/Kreisl tie-up → power (Section 5 diagram).
 
 3. **Executed flow path**
    - Criteria-driven flow (`MainExecuted(criteria)`), where criteria can be:
      - `BCD1120`
      - `BCD1190`
-     - `Throttle` (limited retry, then custom handoff)
+     - `Throttle` (up to 2 tries, then **stops** — it does **not** call the custom flow; only `BCD1190` retry exhaustion does)
 
 4. **Custom flow path**
    - Heavy optimization flow (`Main_CustomFlowPathTest`) with custom DAT selection, PSO, custom ERG checks, valve optimization, and final power closure.
 
 5. **Additional load points flow**
-   - Activated in standard/executed/custom when customer load points exceed base set (`CustomerLoadPoints.Count > 1`), and iterated LP-wise.
+   - **Dedicated entry:** `CustomLoadPointHandler.cxLP_mainKreisl(...)` in `src/AdditionalLoadPoints.cs` (typically from the UI).
+   - **Inline merge:** executed/custom/power-match code also merges extra LPs when `CustomerLoadPoints.Count > 2` (see `Main_Executed.cs`, `Main_Custom.cs`). Details in Section 9.
 
-For **overview diagrams of all four paths in one place**, see the [Flowcharts gallery (all automation paths overview)](#flowcharts-gallery-all-automation-paths-overview) below. Detailed subgraphs remain in **Sections 5–9**.
+For **overview diagrams of all four paths in one place**, see the [Flowcharts gallery (all automation paths overview)](#flowcharts-gallery-all-automation-paths-overview) below. Step-by-step detail for each path is in **Sections 5–9**.
 
 ---
+
+<a id="3-hmbd-logic-families-used-in-code"></a>
 
 ## 3) HMBD logic families used in code
 
@@ -67,37 +93,43 @@ Inside this branch, it splits into:
 1. **Dump condenser ON** (`DumpCondensor == true`)
 2. **Dump condenser OFF** (`DumpCondensor == false`)
 
-Then template choice is refined by:
+Then the code picks a template using:
 
-- PRV feasibility check (`tsatvonp(ExhaustPressure * 0.92 - 0.25) - DeaeratorOutletTemp`),
-- ERG presence (`File.Exists(KREISL.ERG)`),
-- desuperheater decision (`exhaustTemp < PST`).
+- whether the PRV setup is feasible (`tsatvonp(ExhaustPressure * 0.92 - 0.25) - DeaeratorOutletTemp`),
+- whether a Kreisl ERG file already exists (`File.Exists(KREISL.ERG)`),
+- whether a desuperheater is needed (`exhaustTemp < PST`).
 
 ---
 
+<a id="4-code-locations-quick-map"></a>
+
 ## 4) Code locations (quick map)
 
-For **explicit execution entry methods** (`Main4`, `MainKreisL`, `MainExecuted`, custom, additional LP), see **[Section 11: Code documentation — execution starting points](#11-code-documentation-execution-starting-points)**.
+For **where the program actually starts** (`Main4`, `MainKreisL`, `MainExecuted`, custom, additional LP), see **[Section 11: Where execution starts in code](#11-code-documentation-execution-starting-points)**.
 
 - `src/kreisl.cs`
-  - `StartKreisl.MainKreisL(...)` orchestration
+  - `StartKreisl.MainKreisL(...)` — runs the full standard flow starting from Kreisl
   - `FillInputValues()` branch behavior for open/closed conditions
 - `src/core/Handlers/KreislDATHandler.cs`
   - `RefreshKreislDAT()` template selection and copy/update logic
 - `src/core/HMBD/HMBD_Configuration.cs`
-  - HMBD pre-feasibility and extraction behavior
+  - HMBD early checks and data extraction
 - `src/core/Utilities/PrintPDF.cs`
   - closed-cycle output template combinations for dump/deaerator states
 
 ---
 
+<a id="flowcharts-gallery-all-automation-paths-overview"></a>
+
 ## Flowcharts gallery (all automation paths overview)
 
-This section collects **compact end-to-end flowcharts** for the four pipelines, plus **sub-charts** under each path that zoom into the main substeps (what actually runs between the big boxes). Full-size template and branch logic live in **Sections 5–9**.
+Here you will find **short end-to-end flowcharts** for all four flows, plus **smaller charts** under each path that show what happens inside the main steps. Full template rules and branch logic are in **Sections 5–9**.
+
+<a id="standard-path-flowchart-overview"></a>
 
 ### Standard path flowchart (overview)
 
-Detailed template selection (`RefreshKreislDAT`), Kreisl launches, intermediate Turba/varicode rename, and bending/thrust escalation are documented in **[Section 5](#5-flowchart-standard-path-starting-section)** and **[Section 6](#6-theory-walkthrough-explain-the-full-standard-flowchart)**.
+Template selection (`RefreshKreislDAT`), Kreisl runs, Turba/varicode renames, and bending/thrust fixes are covered in **[Section 5](#5-flowchart-standard-path-starting-section)** and **[Section 6](#6-theory-walkthrough-explain-the-full-standard-flowchart)**.
 
 ```mermaid
 flowchart TD
@@ -112,7 +144,7 @@ flowchart TD
     S4["TurbaConfig.LaunchTurba"]
     S5["ERGVerification.ErgResultsCheck"]
     S6["ValvePointOptimizer.ValvePointOptimize"]
-    S7["PowerMatch.CheckPower + post-Turba stabilization per Section 5.1.5"]
+    S7["PowerMatch.CheckPower + post-Turba final sync steps per Section 5.1.5"]
 
     E1 --> S0
     E2 --> S0
@@ -120,9 +152,9 @@ flowchart TD
   end
 ```
 
-#### Standard path — sub-charts (what happens inside the boxes)
+#### Standard path — detail charts (what happens inside the boxes)
 
-**Sub-chart STD-A — Pre-feasibility and who picks the reference DAT (`DatFileSelector`)**
+**Detail chart STD-A — Early checks and who picks the reference DAT (`DatFileSelector`)**
 
 ```mermaid
 flowchart TD
@@ -140,7 +172,7 @@ flowchart TD
   A --> B --> D1
 ```
 
-**Sub-chart STD-B — Kreisl template family (`RefreshKreislDAT` logic, simplified)**
+**Detail chart STD-B — Kreisl template family (`RefreshKreislDAT` logic, simplified)**
 
 ```mermaid
 flowchart TD
@@ -161,7 +193,7 @@ flowchart TD
   R --> Q1
 ```
 
-**Sub-chart STD-C — Compute core (between “LPs generated” and “valve optimize”)**
+**Detail chart STD-C — Compute core (between “LPs generated” and “valve optimize”)**
 
 ```mermaid
 flowchart LR
@@ -173,7 +205,7 @@ flowchart LR
   ER2 --> VO["ValvePointOptimize"]
 ```
 
-**Sub-chart STD-D — Closure strip (tie Turba ↔ Kreisl, then power)**
+**Detail chart STD-D — Closure strip (tie Turba ↔ Kreisl, then power)**
 
 ```mermaid
 flowchart TD
@@ -185,9 +217,11 @@ flowchart TD
   F --> T2 --> RN --> WH --> PM
 ```
 
+<a id="executed-path-flowchart-overview"></a>
+
 ### Executed path flowchart (overview)
 
-Criteria lifecycle, fallback `BCD1120 → BCD1190 → Main_CustomFlowPathTest`, and per-checker diagrams are in **[Section 7](#7-flow-wise-content-executed-flow-path)**.
+How criteria switch, fallback (`BCD1120 → BCD1190 → Main_CustomFlowPathTest`), and ERG checks work is in **[Section 7](#7-flow-wise-content-executed-flow-path)**.
 
 ```mermaid
 flowchart TD
@@ -205,7 +239,7 @@ flowchart TD
     E8["UpdateLP5"]
     E9["ErgResultsCheckExecuted(criteria,true)"]
     EA["ValvePointOptimize(maxLp)"]
-    EB["Final stabilization FillVari40 + Turba · TURBA.CON · FillWheelChamberPressure"]
+    EB["Final sync steps FillVari40 + Turba · TURBA.CON · FillWheelChamberPressure"]
     EC["CheckPower(maxLp); additional LPs merge if Section 9 applies"]
 
     E0 --> E0b --> E1 --> E2 --> E3 --> E4 --> E5
@@ -214,24 +248,24 @@ flowchart TD
   end
 ```
 
-#### Executed path — sub-charts (criteria gates and ERG sandwich)
+#### Executed path — detail charts (retry limits and ERG before and after LP5)
 
-**Sub-chart EXE-A — Retry / fallback ladder (same idea as `MainExecuted`)**
+**Detail chart EXE-A — Retry / fallback ladder (same idea as `MainExecuted`)**
 
 ```mermaid
 flowchart TD
   START["Counters updated criterion still allowed"]
   TH{"Throttle criterion and retries over MAX_THROTTLE_CALLS"}
   TH -->|Yes| RTH["Return leave throttle executed path"]
-  TH -->|No| BD1{"On BCD1120 and neighbor budget exhausted"}
+  TH -->|No| BD1{"On BCD1120 and neighbor retry limit reached"}
   BD1 -->|Yes| H1190["Hand off rerun as BCD1190"]
-  BD1 -->|No| BD2{"On BCD1190 and budget exhausted"}
+  BD1 -->|No| BD2{"On BCD1190 and retry limit reached"}
   BD2 -->|Yes| HC["Main_CustomFlowPathTest maxLp"]
-  BD2 -->|No| RUN["Run DAT select Turba ERG sandwich power"]
+  BD2 -->|No| RUN["Run DAT select Turba ERG before and after LP5 power"]
   START --> TH
 ```
 
-**Sub-chart EXE-B — Reference DAT chosen by criterion**
+**Detail chart EXE-B — Reference DAT chosen by criterion**
 
 ```mermaid
 flowchart TD
@@ -247,7 +281,7 @@ flowchart TD
   A --> B --> C
 ```
 
-**Sub-chart EXE-C — Turba + ERG “sandwich” around LP5**
+**Detail chart EXE-C — Turba + ERG checks before and after LP5**
 
 ```mermaid
 flowchart LR
@@ -257,7 +291,7 @@ flowchart LR
   E1 --> VO["ValvePointOptimize maxLp"]
 ```
 
-**Sub-chart EXE-D — Final stabilization (same shape as standard tail)**
+**Detail chart EXE-D — Final sync steps (same shape as standard tail)**
 
 ```mermaid
 flowchart TD
@@ -268,6 +302,8 @@ flowchart TD
   CP["CheckPower maxLp"]
   V40 --> TB2 --> RN --> WCP --> CP
 ```
+
+<a id="custom-path-flowchart-overview"></a>
 
 ### Custom path flowchart (overview)
 
@@ -287,7 +323,7 @@ flowchart TD
     C7["PSO InvokeTurbineDesigner"]
     C8["ERG_CUSTOM_BASE_CHECKS"]
     C9["TurnaConvert · UpdatePunConvertor · Launch Turba"]
-    CQ{"Pre-feasibility → ERG criterion"}
+    CQ{"Early checks → ERG criterion"}
     CR1120["Custom BCD1120 check"]
     CR1190["Custom BCD1190 check"]
     CS["LP5 update + second criterion pass"]
@@ -302,9 +338,9 @@ flowchart TD
   end
 ```
 
-#### Custom path — sub-charts (DAT rebuild, PSO, ERG choice, closure)
+#### Custom path — detail charts (DAT rebuild, PSO, ERG choice, closure)
 
-**Sub-chart CST-A — `PrepareDatFile(mxlp)` inside custom (DAT surgery)**
+**Detail chart CST-A — `PrepareDatFile(mxlp)` inside custom (DAT edits)**
 
 ```mermaid
 flowchart TD
@@ -320,7 +356,7 @@ flowchart TD
   P0 --> P1 --> P2 --> P3 --> P4 --> P5 --> P6 --> P7 --> P8
 ```
 
-**Sub-chart CST-B — After DAT is ready BCD rewrite + optimizer**
+**Detail chart CST-B — After DAT is ready BCD rewrite + optimizer**
 
 ```mermaid
 flowchart LR
@@ -329,7 +365,7 @@ flowchart LR
   E0 --> TC["TurnaConvert"]
 ```
 
-**Sub-chart CST-C — ERG-derived feedback into DAT**
+**Detail chart CST-C — ERG-derived feedback into DAT**
 
 ```mermaid
 flowchart TD
@@ -340,12 +376,12 @@ flowchart TD
   UC --> RD --> N5 --> WR
 ```
 
-**Sub-chart CST-D — Criterion split after Turba restart**
+**Detail chart CST-D — Criterion split after Turba restart**
 
 ```mermaid
 flowchart TD
   X["Fresh Turba run after ERG_CUSTOM_BASE_CHECKS chain"]
-  Q{"Pre-feasibility outcome"}
+  Q{"Early checks outcome"}
   Q -->|BCD1120 path| Z1["Custom BCD1120 ERG checker"]
   Q -->|BCD1190 path| Z2["Custom BCD1190 ERG checker"]
   Z1 --> LP["Update LP5 + second criterion pass"]
@@ -353,7 +389,7 @@ flowchart TD
   LP --> VV["CustomValvePointOptimize"]
 ```
 
-**Sub-chart CST-E — Last mile to power**
+**Detail chart CST-E — Last mile to power**
 
 ```mermaid
 flowchart TD
@@ -364,6 +400,8 @@ flowchart TD
   FT["checkFinalTurbine"]
   FV --> TB --> CF --> FW --> FT
 ```
+
+<a id="additional-load-points-flowchart-overview"></a>
 
 ### Additional load points flowchart (overview)
 
@@ -390,9 +428,9 @@ flowchart TD
   end
 ```
 
-#### Additional load points — sub-charts (Kreisl LP1, mirrored standard block, per-LP merge)
+#### Additional load points — detail charts (Kreisl LP1, mirrored standard block, per-LP merge)
 
-**Sub-chart ALP-A — Startup checks and snapshots**
+**Detail chart ALP-A — Startup checks and snapshots**
 
 ```mermaid
 flowchart TD
@@ -403,7 +441,7 @@ flowchart TD
   A --> B --> C --> D
 ```
 
-**Sub-chart ALP-B — Kreisl LP1 shaping (`fillLPINDat`) at a glance**
+**Detail chart ALP-B — Kreisl LP1 shaping (`fillLPINDat`) at a glance**
 
 ```mermaid
 flowchart TD
@@ -420,7 +458,7 @@ flowchart TD
   DC --> MT["MainTemp append full KREISL.DAT"]
 ```
 
-**Sub-chart ALP-C — Mirror of standard pipeline at scaled LP count (middle block)**
+**Detail chart ALP-C — Mirror of standard flow at scaled LP count (middle block)**
 
 ```mermaid
 flowchart LR
@@ -433,7 +471,7 @@ flowchart LR
   ST --> W["FillWheelChamberPressure from Turba LP1"]
 ```
 
-**Sub-chart ALP-D — Loop over extra customer LPs (unknown dimension)**
+**Detail chart ALP-D — Loop over extra customer LPs (unknown dimension)**
 
 ```mermaid
 flowchart TD
@@ -455,7 +493,7 @@ flowchart TD
   L --> Q1
 ```
 
-**Sub-chart ALP-E — Closeout across cycles**
+**Detail chart ALP-E — Closeout across cycles**
 
 ```mermaid
 flowchart TD
@@ -467,13 +505,15 @@ flowchart TD
 
 ---
 
+<a id="5-flowchart-standard-path-starting-section"></a>
+
 ## 5) Flowchart - Standard path (starting section)
 
 > **Overview chart:** [Standard path flowchart](#standard-path-flowchart-overview) in the [flowcharts gallery](#flowcharts-gallery-all-automation-paths-overview).
 
-Below is the **detailed standard-path flowchart**, including Kreisl template selection (`RefreshKreislDAT`). Executed, custom, and additional-LP summaries are in the same gallery; **Sections 7–9** retain the full breakdowns.
+Below is the **detailed standard-path flowchart for `StartKreisl.MainKreisL`** (Kreisl entry), including Kreisl template selection (`RefreshKreislDAT`). The shorter **`StartExec.Main4`** path skips Kreisl launches, `UpdateLP5`, and the second Turba/ERG block — see Section 11.5.1. Executed, custom, and additional-LP summaries are in the same gallery; **Sections 7–9** have the full breakdowns.
 
-**Reading the spine:** the outer vertical chain uses node IDs **`A` … `W`** (letters only for Mermaid readability). **`D`** expands into subgraph **template selection** (inner diamonds `T1`, `T2`, … — different from **`T2a`**, which is the *second Turba launch* later on the spine). A full glossary of **`A`–`W`** is in **[Section 6.0: Letter legend](#standard-path-letter-legend)**.
+**Reading the main vertical chain:** the outer steps are labeled **`A` … `W`** (short letters so the diagram stays readable). **`D`** opens the **template selection** branch (inner decision boxes `T1`, `T2`, … — not the same as **`T2a`**, which is the *second Turba launch* later on the chain). A full list of **`A`–`W`** is in **[Section 6.0: Letter legend](#standard-path-letter-legend)**.
 
 ```mermaid
 flowchart TD
@@ -576,11 +616,11 @@ flowchart TD
   V --> W["PowerMatch.CheckPower"]
 ```
 
-### 5.0 End-to-end pipeline (shared diagram)
+### 5.0 Full flow overview (shared diagram)
 
-This is the clean top-level view of how inputs move through template selection, efficiency, prefeasibility, and the Standard → Executed → Custom fallback chain before **Create HMBD**. It sits before the detailed Standard-path splits in Section 5.1.
+This is the clean top-level view of how inputs move through template selection, efficiency, early checks, and the Standard → Executed → Custom fallback chain before **Create HMBD**. It sits before the detailed Standard-path splits in Section 5.1.
 
-![End-to-end pipeline: inputs through prefeasibility to Standard / Executed / Custom and HMBD](assets/pipeline-hmbd-flowchart.png)
+![Full flow: inputs through early checks to Standard / Executed / Custom and HMBD](assets/pipeline-hmbd-flowchart.png)
 
 ```mermaid
 flowchart TD
@@ -589,7 +629,7 @@ flowchart TD
   P3[3. Decide Kreisl template based on input, flow chart prepared]
   P4[4. Find nearest efficiency]
   P5[5. Compute power and volumetric flow from efficiency and Kreisl template]
-  P6{6. Prefeasibility check}
+  P6{6. Early feasibility check}
   P7[7. Standard flow path]
   P8[8. Executed flow path]
   P9[9. Custom flow path]
@@ -609,7 +649,7 @@ flowchart TD
 
 To keep the Standard section readable (not messy), the same logic is split into smaller charts exactly like your diagram style.
 
-#### 5.1.1 Main Standard pipeline (7.1 to 7.10)
+#### 5.1.1 Main standard flow (7.1 to 7.10)
 
 ```mermaid
 flowchart TD
@@ -666,7 +706,7 @@ flowchart TD
 ```
 
 Explanation:
-- This block reduces valve-point deviation iteratively.
+- This block reduces valve-point deviation in a loop.
 - Based on status + deviation band, code applies nozzle pair/mass-flow corrections.
 - Control then returns to `7.10 Check Power`.
 
@@ -693,22 +733,24 @@ flowchart TD
 ```
 
 Explanation:
-- `7.9.1` adds the coupling marker (`varicode 40`) so Turba-Kreisl handoff is complete.
+- `7.9.1` adds the coupling marker (`varicode 40`) so Turba-Kreisl switch is complete.
 - `7.10` gates success by power difference first.
-- If LP5/bending/thrust checks fail repeatedly, flow escalates to `8. Executed flow path`.
+- If LP5/bending/thrust checks fail repeatedly, flow switches to `8. Executed flow path`.
 - If all checks pass, flow closes at `10. Create HMBD`.
 
 ---
 
-## 6) Theory walkthrough - explain the full standard flowchart
+<a id="6-theory-walkthrough-explain-the-full-standard-flowchart"></a>
 
-This section explains what each major block in the flowchart is doing and why it exists.
+## 6) Standard path explained (plain language)
+
+This section explains what each major step in the Section 5 flowchart does and why it is there.
 
 <a id="standard-path-letter-legend"></a>
 
 ### 6.0 Legend — Section 5 main-spine diagram letters (`A` … `W`)
 
-The large **standard-path Mermaid diagram** at the start of **[Section 5: Flowchart — Standard path](#5-flowchart-standard-path-starting-section)** gives each step on the outer chain a short **node ID** (`A`, `B`, `C`, …). Those IDs exist **only inside that figure** — they are not C# identifiers.
+The large **standard-path diagram** at the start of **[Section 5: Flowchart — Standard path](#5-flowchart-standard-path-starting-section)** labels each step on the outer chain with a short **letter** (`A`, `B`, `C`, …). Those letters exist **only in the diagram** — they are not C# variable names.
 
 When a subsection heading below writes **(Section 5: `X` → `Y`)**, it means “the part of Section 5’s diagram from node `X` through node `Y`.”
 
@@ -719,7 +761,7 @@ Spine IDs and what they label in Section 5:
 | `A` | `StartKreisl.MainKreisL` |
 | `B` | Delete `.CON` / `.ERG` |
 | `C` | Create `KreislDATHandler` |
-| `D` | `RefreshKreislDAT` (same box that leads into subgraph **template selection**; inner nodes there are named `T1`, `T2`, … — see Section 6.2) |
+| `D` | `RefreshKreislDAT` (same box that opens **template selection**; inner boxes there are named `T1`, `T2`, … — see Section 6.2) |
 | `E` | `FillClosestTurbineEfficiency` |
 | `F` | `GetTurbaCON(ClosestProjectID)` |
 | `G` | `InitConfig` (after Kreisl setup) |
@@ -740,7 +782,7 @@ Spine IDs and what they label in Section 5:
 | `V` | `FillWheelChamberPressure` |
 | `W` | `PowerMatch.CheckPower` |
 
-**Do not confuse:** Section 6.2 heading **“subgraph (`T`)”** refers to the **whole template-selection subgraph** in Section 5 (nicknamed **`T`** in prose). That is unrelated to spine node **`T2a`** (second Turba run).
+**Do not confuse:** Section 6.2 heading **“branch (`T`)”** refers to the **whole template-selection branch** in Section 5 (called **`T`** in prose). That is unrelated to spine node **`T2a`** (second Turba run).
 
 ---
 
@@ -758,11 +800,11 @@ Why this matters:
 - template selection must happen before running Kreisl/Turba,
 - all later calculations depend on this initial DAT state.
 
-### 6.2 Template selection subgraph (**`T`** = inner Section 5 subgraph on node `D`)
+### 6.2 Template selection branch (**`T`** = inner part of Section 5 on node `D`)
 
-`RefreshKreislDAT` is the most important decision engine in the standard path. **In prose here, `T` means the nested “template selection” logic** hanging off **`D`** in Section 5 (`tmplSel`), not spine node **`T2a`**.
+`RefreshKreislDAT` is the main decision step in the standard path. **Here, `T` means the nested “template selection” logic** on **`D`** in Section 5 (`tmplSel`), not spine node **`T2a`**.
 
-In the **[Section 5 Mermaid diagram](#5-flowchart-standard-path-starting-section)**, decision node **`T1`** asks: *“Is `DeaeratorOutletTemperature` in the load point greater than zero?”*
+In the **[Section 5 flowchart](#5-flowchart-standard-path-starting-section)**, decision box **`T1`** asks: *“Is `DeaeratorOutletTemperature` in the load point greater than zero?”*
 
 - **`T1 = Yes`** — you leave `T1` on the **Yes** arrow → **closed-cycle with deaerator** branch.
 - **`T1 = No`** — you leave `T1` on the **No** arrow → **`DeaeratorOutletTemperature` is not greater than zero** (not set / zero) → treated as **open-cycle / PST** side of template selection (“no deaerator outlet temp”).
@@ -795,7 +837,7 @@ When `DeaeratorOutletTemperature > 0`, the next split is dump condenser:
 - `DumpCondensor == true` (dump ON),
 - `DumpCondensor == false` (dump OFF).
 
-Inside both dump ON/OFF paths, code checks PRV feasibility:
+Inside both dump ON/OFF paths, code checks whether the PRV setup is OK:
 
 - `tsatvonp(ExhaustPressure*0.92 - 0.25) - DeaeratorOutletTemp > 0`.
 
@@ -812,7 +854,7 @@ For non-PRV outcomes, the selected PRV template is converted using:
 
 This conversion step is essential because template families are reused and then adjusted to match final mode.
 
-### 6.3 Post-template thermodynamic initialization (Section 5: `D` → `J`)
+### 6.3 After template pick: set up steam values (Section 5: `D` → `J`)
 
 After template decision:
 
@@ -820,11 +862,11 @@ After template decision:
 2. `GetTurbaCON(ClosestProjectID)` binds reference project CON data.
 3. `InitConfig` hydrates runtime model state.
 4. `LaunchKreisL` runs Kreisl with selected template/input.
-5. `RefreshKreislDAT` + `InitConfig` run again to sync generated outputs back into the pipeline.
+5. `RefreshKreislDAT` + `InitConfig` run again to sync generated outputs back into the flow.
 
 The key idea is: **select -> run -> resync** before entering final DAT/Turba checks.
 
-### 6.4 Main computation pipeline (Section 5: `K` → `R`)
+### 6.4 Main calculation steps (Section 5: `K` → `R`)
 
 This is the operational sequence:
 
@@ -834,14 +876,14 @@ This is the operational sequence:
 4. `LaunchTurba` runs turbine simulation.
 5. `ERGResultsCheck` validates result quality.
 6. `UpdateLP5` modifies LP5 scenario and checks ERG again.
-7. `ValvePointOptimize` adjusts valve configuration for convergence/performance.
+7. `ValvePointOptimize` adjusts valve configuration for a better valve match.
 
 Why LP5 is checked again:
 
 - LP5 often acts as a corrective or boundary operating point,
 - second ERG check ensures the updated point still satisfies constraints.
 
-### 6.5 Final stabilization and power closure (Section 5: `S` → `T2a` → `U` → `V` → `W`)
+### 6.5 Final sync steps and power closure (Section 5: `S` → `T2a` → `U` → `V` → `W`)
 
 This is the **tail of the Section 5 spine after valve optimization** — not only `S` and `W`, but every hop in between (see **Section 6.0**). Some older notes abbreviated this as “`S` → `W`”; the diagram’s full chain is below.
 
@@ -849,13 +891,13 @@ After valve optimization:
 
 1. **`S` —** `FillVari40` updates DAT/Kreisl variable settings.
 2. **`T2a` —** `LaunchTurba` runs once more on updated values.
-3. **`U` —** `Rename TURBATURBAE1.DAT.CON -> TURBA.CON` normalizes output naming for downstream use.
+3. **`U` —** `Rename TURBATURBAE1.DAT.CON -> TURBA.CON` normalizes output naming for later use.
 4. **`V` —** `FillWheelChamberPressure` pushes wheel chamber pressure back to Kreisl/DAT side.
 5. **`W` —** `PowerMatch.CheckPower` performs final power closure.
 
 This final block ensures the output is not just feasible, but also aligned with target power behavior.
 
-### 6.6 Fallback and resilience behavior (conceptual)
+### 6.6 Backup paths when something fails
 
 Across this flow, the code uses practical fallback rules:
 
@@ -863,11 +905,13 @@ Across this flow, the code uses practical fallback rules:
 - if branch-specific PRV mode is not feasible, convert PRV templates to non-PRV variants,
 - rerun key steps after major state updates (Kreisl run, LP update, valve optimization).
 
-This makes the pipeline robust to missing intermediate files and branch-dependent state transitions.
+This helps the flow keep going when some files are missing or the branch changes.
 
 ---
 
-## 7) Flow-wise content: Executed flow path
+<a id="7-flow-wise-content-executed-flow-path"></a>
+
+## 7) Executed flow path (step-by-step)
 
 > **Overview chart:** [Executed path flowchart](#executed-path-flowchart-overview) in the [flowcharts gallery](#flowcharts-gallery-all-automation-paths-overview).
 
@@ -876,10 +920,10 @@ This makes the pipeline robust to missing intermediate files and branch-dependen
 The executed flow sequence is:
 
 1. initialize counters and criteria limits (`mainCallCounters`, `throttleCounters`),
-2. apply retry/fallback gates:
+2. apply retry and fallback rules:
    - `Throttle` only up to `MAX_THROTTLE_CALLS`,
-   - `BCD1120` exhaustion -> switch to `BCD1190`,
-   - `BCD1190` exhaustion -> move to custom flow (`Main_CustomFlowPathTest`),
+   - `BCD1120` retry limit -> switch to `BCD1190`,
+   - `BCD1190` retry limit -> move to custom flow (`Main_CustomFlowPathTest`),
 3. run HMBD defaults and nearest project selection (`PowerKNN`, `MoveYAndSetParams`),
 4. select executed DAT (`ReferenceDATSelectorExecuted`),
 5. load DAT and generate LPs (`LoadDatFile`, `GenerateLoadPoints`),
@@ -889,33 +933,33 @@ The executed flow sequence is:
 9. run ERG checks by criteria (`ErgResultsCheckExecuted(criteria, false)`),
 10. update LP5 and re-check ERG (`UpdateLP5`, `ErgResultsCheckExecuted(criteria, true)`),
 11. valve optimization (`ValvePointOptimize`),
-12. final stabilization:
+12. final final sync steps:
     - `FillVari40`
     - Turba re-launch
     - rename `TURBATURBAE1.DAT.CON` -> `TURBA.CON`
     - fill wheel chamber pressure
 13. final power match (`CheckPower`).
 
-### 7.2 Executed criteria sub-flows
+### 7.2 Executed criteria branches
 
 - **BCD1120 flow**
   - Uses `ErgResultsCheckBCD1120` in both initial and LP5-updated passes.
-  - If call budget is exhausted, auto-handoff to `BCD1190`.
+  - If retry limit is reached, auto-switch to `BCD1190`.
 
 - **BCD1190 flow**
   - Uses `ErgResultsCheckBCD1190` in both initial and LP5-updated passes.
-  - If call budget is exhausted, auto-handoff to custom flow.
+  - If retry limit is reached, auto-switch to custom flow.
 
 - **Throttle flow**
   - Uses `ErgResultsCheckThrottle`.
   - Hard-limited retry count; beyond limit, flow returns and effectively shifts toward custom handling path.
 
-### 7.3 Executed main pipeline flowchart
+### 7.3 Executed main flowchart
 
 ```mermaid
 flowchart TD
   A["Init mainCallCounters, throttleCounters"]
-  B["Retry / fallback gates: Throttle ≤ MAX_THROTTLE_CALLS; BCD1120 → BCD1190; BCD1190 → custom"]
+  B["Retry rules: Throttle ≤ 2 then stop; BCD1120 → BCD1190; BCD1190 → custom"]
   C["PowerKNN, MoveYAndSetParams (HMBD defaults + nearest project)"]
   D["ReferenceDATSelectorExecuted"]
   E["LoadDatFile, GenerateLoadPoints"]
@@ -939,17 +983,17 @@ flowchart TD
 
 ### 7.4 Executed criteria and ERG fallback flowchart
 
-Each criterion uses the matching ERG checker on **both** passes in the main pipeline (`ErgResultsCheckExecuted(criteria, false)` then after `UpdateLP5`, `ErgResultsCheckExecuted(criteria, true)`). This chart shows how criteria **hand off** when budgets are exhausted.
+Each criterion uses the matching ERG checker on **both** passes in the main flow (`ErgResultsCheckExecuted(criteria, false)` then after `UpdateLP5`, `ErgResultsCheckExecuted(criteria, true)`). This chart shows how criteria **switch** when retry limits are reached.
 
 ```mermaid
 flowchart TD
   C0{"Active executed criterion"}
   E1["BCD1120: ErgResultsCheckBCD1120 (initial + LP5 passes)"]
-  E2{BCD1120 budget exhausted?}
+  E2{BCD1120 retry limit reached?}
   E3["BCD1190: ErgResultsCheckBCD1190 (initial + LP5 passes)"]
-  E4{BCD1190 budget exhausted?}
+  E4{BCD1190 retry limit reached?}
   CF["Main_CustomFlowPathTest"]
-  OK["Continue executed pipeline"]
+  OK["Continue executed flow"]
   T1["Throttle: ErgResultsCheckThrottle (initial + LP5 passes)"]
   T2{Past MAX_THROTTLE_CALLS?}
   T3["Return; toward custom handling path"]
@@ -959,7 +1003,7 @@ flowchart TD
   C0 -->|Throttle| T1
 
   E1 --> E2
-  E2 -->|Yes, handoff| E3
+  E2 -->|Yes, switch| E3
   E2 -->|No| OK
 
   E3 --> E4
@@ -971,7 +1015,7 @@ flowchart TD
   T2 -->|No| OK
 ```
 
-### 7.5 `MainExecuted(criteria, maxLp)` in-depth flow and purpose
+### 7.5 `MainExecuted(criteria, maxLp)` what it does (detailed flow)
 
 This is the **main controller** for the executed flow path.
 
@@ -984,7 +1028,7 @@ In simple terms, it:
 5. applies criterion-specific ERG checks,
 6. updates LP5 and checks again,
 7. optimizes valve behavior,
-8. performs final stabilization and power matching,
+8. performs final final sync steps and power matching,
 9. falls back to the next path if the current executed path cannot close.
 
 #### 7.5.1 Easy overall picture
@@ -1007,7 +1051,7 @@ flowchart TD
   N["UpdateLP5()"]
   O["ErgResultsCheckExecuted(criteria, true)"]
   P["ValvePointOptimize(maxLp)"]
-  Q["Final stabilization: FillVari40 + Turba + TURBA.CON + wheel pressure"]
+  Q["Final sync steps: FillVari40 + Turba + TURBA.CON + wheel pressure"]
   R["CheckPower(maxLp)"]
   S["Additional load points / Kreisl merge if needed"]
 
@@ -1029,10 +1073,10 @@ Before the executed calculation starts, `MainExecuted()` checks whether the curr
 Behavior:
 
 - if the criterion is `Throttle` and the retry limit is exceeded, the method returns and effectively gives up on the throttle-executed path
-- if `BCD1120` exceeds its allowed neighbor/call budget, the flow resets state and hands off to `BCD1190`
+- if `BCD1120` exceeds its allowed neighbor/call budget, the flow resets state and switches to `BCD1190`
 - if `BCD1190` exceeds its budget, the flow moves to `Main_CustomFlowPathTest(maxLp)`
 
-So this method is not just a run pipeline. It is also the **gatekeeper for executed-path retry and fallback policy**.
+This method does more than run the steps: it **controls when the executed path retries or switches to another path**.
 
 #### 7.5.3 Main executed setup phase
 
@@ -1056,7 +1100,7 @@ Once the criterion is accepted, the method performs the executed-run setup:
 
 This means the executed flow first establishes the **nearest known project context**, then rewrites that selected DAT around the current request.
 
-### 7.6 `ReferenceDATSelectorExecuted(criteria)` in-depth flow and purpose
+### 7.6 `ReferenceDATSelectorExecuted(criteria)` what it does (detailed flow)
 
 This step is the executed-flow **reference project selector**.
 
@@ -1098,7 +1142,7 @@ What it really does:
 
 So this is the step that converts “nearest executed project” into an actual working DAT file.
 
-### 7.7 `PrepareDATFileExecuted(maxLp)` in-depth flow and purpose
+### 7.7 `PrepareDATFileExecuted(maxLp)` what it does (detailed flow)
 
 This method is the executed-flow **DAT reconstruction step**.
 
@@ -1130,7 +1174,7 @@ Important meaning:
 
 So this is the executed equivalent of the custom DAT rebuild step.
 
-### 7.8 `UpdateLP5()` in-depth flow and purpose
+### 7.8 `UpdateLP5()` what it does (detailed flow)
 
 This method regenerates the special LP5 case before the second ERG pass.
 
@@ -1171,9 +1215,9 @@ Why it matters:
 
 So `UpdateLP5()` is the executed flow’s **second-pass stress/correction load-point generator**.
 
-### 7.9 `ErgResultsCheckExecuted(criteria, isLP5Update, maxLp)` in-depth flow and purpose
+### 7.9 `ErgResultsCheckExecuted(criteria, isLP5Update, maxLp)` what it does (detailed flow)
 
-This method is the **dispatcher** for executed ERG validation.
+This method **picks which ERG checks** to run for the executed path.
 
 It does not perform the actual check logic itself. It routes to the criterion-specific checker:
 
@@ -1208,7 +1252,7 @@ flowchart TD
 
 Important fallback behavior:
 
-- if nozzle optimization fails, it resets nearest-neighbor state and immediately hands off to `MainExecuted("BCD1190", maxLp)`
+- if nozzle optimization fails, it resets nearest-neighbor state and immediately calls `MainExecuted("BCD1190", maxLp)`
 
 It also contains load-point repair behavior:
 
@@ -1232,7 +1276,7 @@ So BCD1120 is not a single yes/no check. It is a **repair-and-retry validation c
 Important fallback behavior:
 
 - if exhaust or nozzle checks fail badly, it usually re-calls `MainExecuted("BCD1190", maxLp)` to try the next neighbor
-- once executed retries are exhausted, the higher-level `MainExecuted()` logic escalates to the custom path
+- once executed retries run out, the higher-level `MainExecuted()` logic switches to the custom path
 
 So BCD1190 is the **second executed rescue path** before custom flow is used.
 
@@ -1254,11 +1298,11 @@ If load-point pressure checks fail:
 - Turba is re-launched
 - throttle ERG checks are re-run
 
-So throttle behaves like a smaller executed sub-flow with its own repair loop.
+So throttle behaves like a smaller executed branch with its own repair loop.
 
-### 7.10 `ValvePointOptimize(maxLp)` and final stabilization
+### 7.10 `ValvePointOptimize(maxLp)` and final final sync steps
 
-After both ERG passes complete, the executed flow enters the final executed stabilization block.
+After both ERG passes complete, the executed flow enters the final executed final sync steps block.
 
 Sequence:
 
@@ -1277,21 +1321,21 @@ flowchart TD
   D["Rename TURBATURBAE1.DAT.CON to TURBA.CON"]
   E["FillWheelChamberPressure()"]
   F["CheckPower(maxLp)"]
-  G["Executed flow stabilized / closed"]
+  G["Executed flow synced / closed"]
 
   A --> B --> C --> D --> E --> F --> G
 ```
 
 Meaning:
 
-- valve-point optimization tries to improve convergence/performance before final closure
+- valve-point optimization tries to improve a better valve match before final closure
 - `Vari40` reconnects Turba and Kreisl state
 - the wheel chamber pressure is pushed back into the Kreisl-side files
 - `CheckPower()` is the final gate for executed success
 
 #### 7.10.0 Inside `ExecPowerMatch.CheckPower(maxLp)` (executed) — full closure flow
 
-`CheckPower(maxLp)` lives in `src/core/Checks/Exec_ERG_PowerMatch.cs` (class `ExecPowerMatch`). It is the **last “decision gate”** of the executed path: it tries to **close** on power, no-load, bending (LP5 repair), thrust, and “final bending across all LPs”. If it cannot close within the internal budgets, it **falls back** to the custom path (`Main_CustomFlowPathTest`).
+`CheckPower(maxLp)` lives in `src/core/Checks/Exec_ERG_PowerMatch.cs` (class `ExecPowerMatch`). It is the **last main check** of the executed path: it tries to **close** on power, no-load, bending (LP5 repair), thrust, and “final bending across all LPs”. If it cannot close within its retry limits, it **falls back** to the custom path (`Main_CustomFlowPathTest`).
 
 **What it uses (inputs):**
 
@@ -1321,7 +1365,7 @@ Meaning:
      - if still not matched: logs failure and cancels
 
 3. **No-load optimization**
-   - `NoLoadPowerOptimize(maxLp)` delegates to `ExecNoLoadPowerOptimizer.NoLoadPowerOptimize(maxLp)`
+   - `NoLoadPowerOptimize(maxLp)` calls `ExecNoLoadPowerOptimizer.NoLoadPowerOptimize(maxLp)`
 
 4. **LP5 bending loop (repair + re-run Turba)**
    - reads bending from Turba: `OutputDataList[5].Bending`
@@ -1558,7 +1602,9 @@ So the executed flow can end either as:
 
 ---
 
-## 8) Flow-wise content: Custom flow path
+<a id="8-flow-wise-content-custom-flow-path"></a>
+
+## 8) Custom flow path (step-by-step)
 
 > **Overview chart:** [Custom path flowchart](#custom-path-flowchart-overview) in the [flowcharts gallery](#flowcharts-gallery-all-automation-paths-overview).
 
@@ -1570,7 +1616,7 @@ The custom flow sequence is:
 2. read nearest Turba context and fill input values,
 3. set HMBD defaults + initial efficiency setup,
 4. generate custom load points (`CustomLoadPointGenerator.GenerateLoadPoints`),
-5. pre-feasibility checks (`fillPrefeasibilityDecisionChecks`),
+5. early checks (`fillPrefeasibilityDecisionChecks`),
 6. pick nearest custom params and custom reference DAT:
    - `GetNearestParams_Custom`
    - delete executed DAT
@@ -1581,7 +1627,7 @@ The custom flow sequence is:
    - PSO flow optimizer (`InvokeTurbineDesigner`),
 9. run custom base checks (`ERG_CUSTOM_BASE_CHECKS`),
 10. convert/update steam path (`TurnaConvert`, `UpdatePunConvertor`) and launch Turba,
-11. select ERG criterion from pre-feasibility decision:
+11. select ERG criterion from early checks decision:
    - custom BCD1120 check or
    - custom BCD1190 check,
 12. LP5 update + second criterion check,
@@ -1611,7 +1657,7 @@ flowchart TD
   L["ERG_CUSTOM_BASE_CHECKS"]
   M["TurnaConvert, UpdatePunConvertor"]
   N["Launch Turba"]
-  Q{"ERG criterion from pre-feasibility"}
+  Q{"ERG criterion from early checks"}
   R1120["Custom BCD1120 check"]
   R1190["Custom BCD1190 check"]
   S["LP5 update + second criterion check"]
@@ -1718,7 +1764,7 @@ Implementation breakdown:
 - `LoadLP1FromDat()` captures the original first load-point structure so the regenerated DAT keeps the expected LP1 baseline.
 - `DeleteRowAfterFirstLoadPoint()` and `InsertDataLineUnderFirstLPFixed()` normalize the DAT block immediately under LP1 before bulk LP insertion.
 - `DeleteLoadPoints()` clears previously existing load-point entries from the working DAT.
-- `InsertLoadPointsWithExactFormattingUsingMid(mxlp)` writes the regenerated custom LP rows with the exact DAT formatting expected by downstream tools.
+- `InsertLoadPointsWithExactFormattingUsingMid(mxlp)` writes the regenerated custom LP rows with the exact DAT formatting expected by later tools.
 - `InsertDataLineUnderND(totalLps)` updates the ND section with the effective number of generated load points.
 - `DatFileInitParamsExceptLP()` refreshes non-load-point initialization / machine parameters after the LP rewrite.
 - `InsertSwallowLoadPoint()` appends the swallow operating point needed for later custom processing.
@@ -1729,7 +1775,7 @@ So `PrepareDatFile(mxlp)` is not selecting projects or optimizing anything by it
 
 This method is the custom-flow **BCD rewrite step** used after DAT preparation.
 
-Its role is simple but important: it loads the current DAT, updates the BCD-related value in the DAT based on the pre-feasibility decision, and writes the modified DAT back to disk.
+Its role is simple but important: it loads the current DAT, updates the BCD-related value in the DAT based on the early checks decision, and writes the modified DAT back to disk.
 
 At the current implementation level, the `mxlp` argument is passed in from `Main_Custom.cs`, but the actual `BCD_UPDATE()` method does not use it internally.
 
@@ -1754,14 +1800,14 @@ Implementation breakdown:
 
 - `LoadDatFile()` reloads the current working DAT into memory.
 - `BCD_Change()` scans for the `!     ABSTAND AXIALLAGER` section and checks the line immediately below it.
-- If the next line starts with `0.000     0.000`, the code rewrites that line using the pre-feasibility result:
+- If the next line starts with `0.000     0.000`, the code rewrites that line using the early checks result:
   - decision `TRUE` -> set BCD to `1124.000`
   - otherwise -> set BCD to `1198.000`
 - `WriteDatFile()` saves the modified DAT back to `TURBATURBAE1.DAT.DAT`.
 
-So `BCD_UPDATE(mxlp)` is not a full optimization stage by itself. It is a **targeted DAT parameter patch** that converts the custom-flow pre-feasibility decision into the correct BCD setting before downstream checks and optimizers run.
+So `BCD_UPDATE(mxlp)` is not a full optimization stage by itself. It is a **targeted DAT parameter patch** that converts the custom-flow early checks decision into the correct BCD setting before later checks and optimizers run.
 
-### 8.6 `pSOFlowPathOptimizerNozzle.InvokeTurbineDesigner()` in-depth flow and purpose
+### 8.6 `pSOFlowPathOptimizerNozzle.InvokeTurbineDesigner()` what it does (detailed flow)
 
 This is the **main custom nozzle optimization function** in the custom flow. The current implementation uses **relationship-aware PSO only** (`InvokeTurbineDesigner` → `PSOLoop` in `Cu_PSOFlowPathOptimizerNozzle.cs`).
 
@@ -1872,7 +1918,7 @@ This is the real “test a candidate” step:
 
 So the optimizer is **not using a formula-only estimate**. It is using the actual Turba run as the black-box evaluator.
 
-#### 8.6.5 How penalty-based feasibility works
+#### 8.6.5 How failed PSO trials are scored
 
 After each Turba run, `GetPenaltyScore()` is called.
 
@@ -1890,7 +1936,7 @@ The checks include output conditions such as:
 - `LANG`
 - thrust per load point
 
-The exact limits depend on whether the pre-feasibility branch implies **BCD1120** or **BCD1190**.
+The exact limits depend on whether the early checks branch implies **BCD1120** or **BCD1190**.
 
 #### 8.6.6 How correction works when a particle fails
 
@@ -2009,13 +2055,13 @@ flowchart TD
 
 So in one sentence: this function is the **main black-box optimizer that searches for the best feasible custom nozzle design by repeatedly editing the DAT, running Turba, enforcing engineering constraints, and refining the best result**.
 
-### 8.7 `cuPunConvertor.TurnaConvert(mxlp)` in-depth flow and purpose
+### 8.7 `cuPunConvertor.TurnaConvert(mxlp)` what it does (detailed flow)
 
 This method is the **file-conversion and DAT re-preparation bridge** used after the custom nozzle optimizer finishes.
 
 In simple terms, it takes the latest Turba-generated `.PUN` result, converts it back into the working `.DAT` form, inserts the custom varicode lines needed for the next phase, removes the swallow LP block, and fixes the load-point count again.
 
-So this method is not doing optimization. It is turning the optimizer output into the **next valid working DAT** for downstream custom checks and final runs.
+So this method is not doing optimization. It is turning the optimizer output into the **next valid working DAT** for later custom checks and final runs.
 
 #### 8.7.1 Easy overall picture
 
@@ -2153,7 +2199,7 @@ Without this, the LP count metadata in the DAT could disagree with the actual LP
 
 So in one sentence: this function is the **post-optimizer DAT conversion step that transforms Turba output back into a clean custom-runtime DAT for the next engineering checks and launches**.
 
-### 8.8 `cuPunConvertor.UpdatePunConvertor()` in-depth flow and purpose
+### 8.8 `cuPunConvertor.UpdatePunConvertor()` what it does (detailed flow)
 
 This method is the **ERG-to-DAT stage update step** that runs after `TurnaConvert(mxlp)`.
 
@@ -2362,11 +2408,13 @@ flowchart TD
   E -->|none| D
 ```
 
-## 9) Flow-wise content: Additional load points path
+<a id="9-flow-wise-content-additional-load-points-path"></a>
+
+## 9) Additional load points (step-by-step)
 
 > **Overview chart:** [Additional load points flowchart](#additional-load-points-flowchart-overview) in the [flowcharts gallery](#flowcharts-gallery-all-automation-paths-overview).
 
-This path appears when the main flow has **more than one customer load point** to merge into Kreisl/Turba work (exact gate depends on caller: e.g. executed path checks `CustomerLoadPoints.Count > 2` in places; the idea is the same: **extra LPs beyond the base case**).
+This path runs when there are **extra customer load points to merge** into Kreisl/Turba. In `Main_Executed.cs`, `Main_Custom.cs`, and power-match code, the merge block is gated by **`CustomerLoadPoints.Count > 2`** (three or more customer rows). Entry: **`CustomLoadPointHandler.cxLP_mainKreisl(customerLPList)`** in `src/AdditionalLoadPoints.cs`.
 
 Implementation lives mainly in `AdditionalLoadPoints.cs` (`CustomLoadPointHandler`), especially **`cxLP_mainKreisl(customerLPList)`**.
 
@@ -2391,7 +2439,7 @@ Implementation lives mainly in `AdditionalLoadPoints.cs` (`CustomLoadPointHandle
 If you open `src/AdditionalLoadPoints.cs`, it can feel confusing because **two different pipelines are stitched together**:
 
 - **Phase 1 (Kreisl-side LP preparation)**: take customer LPs, write LP1 into `KREISL.DAT`, run Kreisl as needed, and back-fill missing values from `KREISL.ERG`, then sort LPs by volumetric flow.
-- **Phase 2 (Standard-mirror Turba block)**: run the normal **Reference DAT → internal LPs → Turba → ERG → UpdateLP5 → ERG → valve** sequence to stabilize the design at the chosen internal points.
+- **Phase 2 (Standard-mirror Turba block)**: run the normal **Reference DAT → internal LPs → Turba → ERG → UpdateLP5 → ERG → valve** sequence to sync the design at the chosen internal points.
 - **Phase 3 (Per-customer-LP merge loop)**: for each extra customer LP, write/update the Kreisl DAT block using `fillAGainDat` / `fillLPAgain` until all customer LPs are merged, then do final desuperheater sync (if closed/PST) and close with Kreisl + `CheckPower`.
 
 #### 9.1.1 Main flow (phased and readable)
@@ -2412,7 +2460,7 @@ flowchart TD
     A8["fillLoadPointList + RefreshKreislDAT + FillInputDat (+ CorrectLP1unknowParams when single LP)"]
   end
 
-  subgraph P2["Phase 2: Standard-mirror Turba stabilization"]
+  subgraph P2["Phase 2: Standard-mirror Turba final sync steps"]
     direction TB
     B1["HBD defaults + eff init + persist power"]
     B2["ReferenceDATSelector(cxLP_RngStop + 10)"]
@@ -2473,7 +2521,7 @@ flowchart TD
 
 ### 9.2 Per-LP merge after Turba (unknown dimension)
 
-After the Turba stabilization block, the handler walks **each extra customer LP** (`i = 1 .. Count-1`). For `i == 1` it rebuilds the first appended block via `fillAGainDat`. For later indices it picks the unknown and calls **`fillLPAgain(index, dimension, lpRow, initList)`** with `Pr`, `T`, `M`, `P`, or `E`.
+After the Turba final sync steps block, the handler walks **each extra customer LP** (`i = 1 .. Count-1`). For `i == 1` it rebuilds the first appended block via `fillAGainDat`. For later indices it picks the unknown and calls **`fillLPAgain(index, dimension, lpRow, initList)`** with `Pr`, `T`, `M`, `P`, or `E`.
 
 ```mermaid
 flowchart TD
@@ -2502,7 +2550,7 @@ Open-cycle mass-flow tie-up (when neither deaerator nor PST): if mass is unknown
 
 ### 9.2.1 Easy terms: `fillAGainDat` and `fillLPAgain` (additional load points only)
 
-These two functions run **after** Turba has been stabilized. Their job is to **grow one big Kreisl input file** by pasting **one extra operating case at a time** into a string called **`MainTemp`**. At the end of the loop, the code does **`File.WriteAllText("C:\\testDir\\KREISL.DAT", MainTemp)`** — so think of **`MainTemp`** as **“all the Kreisl LP snippets glued together”**.
+These two functions run **after** Turba has been synced. Their job is to **grow one big Kreisl input file** by pasting **one extra operating case at a time** into a string called **`MainTemp`**. At the end of the loop, the code does **`File.WriteAllText("C:\\testDir\\KREISL.DAT", MainTemp)`** — so think of **`MainTemp`** as **“all the Kreisl LP snippets glued together”**.
 
 **`fillAGainDat(i, initList)` — used for the *first* extra customer LP in the merge loop (`i == 1` in `cxLP_mainKreisl`)**
 
@@ -2632,7 +2680,7 @@ After LP1 is in the DAT, a loop over **`CustomerLoadPoints[1..]`** fills any zer
 
 ### 9.5 Standard-path DAT rebuild and checks
 
-The middle block mirrors the **standard** pipeline at scaled LP count:
+The middle block mirrors the **standard** flow at scaled LP count:
 
 - `ReferenceDATSelector((int)cxLP_RngStop + 10)`
 - `cxLP_GenerateLoadPoints("Recal")` then `GenerateLoadPoints()`
@@ -2801,7 +2849,7 @@ flowchart TD
 
 ### 9.11 Inner flow: `CorrectLP1unknowParams()`
 
-Runs only when **`customerLPList.Count == 1`** inside `cxLP_mainKreisl`. It is a **mini calibration loop** for LP1 before the big multi-LP pipeline:
+Runs only when **`customerLPList.Count == 1`** inside `cxLP_mainKreisl`. It is a **small tuning loop** for LP1 before the big multi-LP flow:
 
 1. `HBDsetDefaultCustomerParamas`, `cxLP_GenerateLoadPoints`, `ReferenceDATSelector(1)`, `cxLP_prepareDATFile(1)`, `LaunchTurba(2)`
 2. optional wheel chamber pressure write-back
@@ -2873,36 +2921,40 @@ flowchart TD
 ---
 
 
+<a id="10-complete-flow-map-all-paths"></a>
+
 ## 10) Complete flow map (all paths)
 
 `Main Entry` -> `Standard` **or** `Executed` **or** `Custom`
 
 - `Standard` -> single baseline path -> ERG checks -> valve optimization -> power match.
-- `Executed` -> `BCD1120 / BCD1190 / Throttle` criteria sub-flow -> fallback chain -> power match.
-- `Custom` -> custom DAT + PSO + custom ERG criteria -> valve + final custom checks.
-- `Standard/Executed/Custom` + additional LP count -> `Additional Load Points LP-wise loop`.
+- `Executed` -> `BCD1120 / BCD1190 / Throttle` rules -> fallback chain -> power match.
+- `Custom` -> custom DAT + PSO + custom ERG checks -> valve + final custom checks.
+- `Standard/Executed/Custom` with extra customer load points -> additional load point loop (one LP at a time).
 
-At-a-glance Mermaid diagrams for each branch: [Flowcharts gallery](#flowcharts-gallery-all-automation-paths-overview).
+Overview diagrams for each branch: [Flowcharts gallery](#flowcharts-gallery-all-automation-paths-overview).
 
 ---
 
-## 11) Code documentation — execution starting points
+<a id="11-code-documentation-execution-starting-points"></a>
 
-This section maps **where execution actually starts in code** (types, files, and typical callers) so you can align the flowcharts with the repository. The UI host (Ignite X / MAUI) generally wires button or pipeline actions to these methods; search the solution for the method name to find every call site.
+## 11) Where execution starts in code
+
+This section lists **the methods that start each flow** (class, file, and role) so you can match the flowcharts to the repository. The UI (Ignite X / MAUI) usually connects buttons to these methods; search the solution for the method name to find every caller.
 
 ### 11.1 Primary entry methods (by path)
 
 | Path | Type / method | File | Namespace | Role |
 |------|----------------|------|-----------|------|
-| **Standard (UI-style pipeline)** | `StartExec.Main4` | `src/Program.cs` | `StartExecutionMain` | Builds host, `RefreshKreislDAT`, `InitConfig`, HBD defaults, `DatFileSelector.ReferenceDATSelector`, Turba launch, ERG + valve + `PowerMatch`. |
-| **Standard (Kreisl-first orchestration)** | `StartKreisl.MainKreisL` | `src/kreisl.cs` | `StartKreislExecution` | Longer Kreisl-centric sequence: cleanup, template refresh, `FillClosestTurbineEfficiency`, Kreisl launches, `ReferenceDATSelector`, stabilization steps through `PowerMatch` (matches Section 5 top-level diagram). |
-| **Prefeasibility → branch** | `DatFileSelector.ReferenceDATSelector` | `src/core/HMBD/Ref_DAT_selector.cs` | `HMBD.Ref_DAT_selector` | After `fillPrefeasibilityDecisionChecks`, routes to standard template copy **or** `MainExecutedClass.GotoBCD1190(maxLp)` **or** cancellation when outside automated scope. Alternate path: `FlowPathSelector` in `Exec_Ref_DAT_Selector.cs` (`HMBD.Exec_Ref_DAT_Selector`) calls `MainExecuted(...)` under alternate pre-feasibility branches (includes `Throttle`). |
-| **Executed** | `MainExecutedClass.MainExecuted(criteria, maxLp)` | `src/Main_Executed.cs` | `StartExecutionMain` | Core executed pipeline; `GotoBCD1120` / `GotoBCD1190` delegate here with `BCD1120` / `BCD1190`. |
+| **Standard (UI entry, `Main4`)** | `StartExec.Main4` | `src/Program.cs` | `StartExecutionMain` | Builds host, `RefreshKreislDAT`, `InitConfig`, HBD defaults, `DatFileSelector.ReferenceDATSelector`, Turba launch, ERG + valve + `PowerMatch`. |
+| **Standard (starts from Kreisl)** | `StartKreisl.MainKreisL` | `src/kreisl.cs` | `StartKreislExecution` | Same end goal as `Main4`, but starts with Kreisl: cleanup, template refresh, `FillClosestTurbineEfficiency`, Kreisl runs, `ReferenceDATSelector`, then Turba, checks, and `PowerMatch` (see Section 5 diagram). |
+| **Early checks → branch** | `DatFileSelector.ReferenceDATSelector` | `src/core/HMBD/Ref_DAT_selector.cs` | `HMBD.Ref_DAT_selector` | After `fillPrefeasibilityDecisionChecks`: **Decision TRUE** → standard template; **Decision FALSE + Decision_2 TRUE** → `GotoBCD1190`; **both FALSE** → cancel (2 GBC). In `Exec_Ref_DAT_Selector.cs`, executed routing can also call `MainExecuted("BCD1120")`, `MainExecuted("BCD1190")`, or `MainExecuted("Throttle")` depending on the same checks and inlet volumetric flow. |
+| **Executed** | `MainExecutedClass.MainExecuted(criteria, maxLp)` | `src/Main_Executed.cs` | `StartExecutionMain` | Main executed flow; `GotoBCD1120` / `GotoBCD1190` call this with `BCD1120` / `BCD1190`. |
 | **Executed (shortcuts)** | `GotoBCD1120`, `GotoBCD1190` | `src/Main_Executed.cs` | `StartExecutionMain` | Public entry points used from `Ref_DAT_selector`, ERG checkers, and related classes. |
-| **Custom** | `CustomExecutedClass.Main_CustomFlowPathTest(mxlp)` | `src/Main_Custom.cs` | `StartExecutionMain` | Custom DAT, PSO, custom ERG checks, valve + `checkFinalTurbine`. Also reached from `MainExecutedClass` when criteria budgets exhaust (see `Main_Executed.cs` private handoff). |
+| **Custom** | `CustomExecutedClass.Main_CustomFlowPathTest(mxlp)` | `src/Main_Custom.cs` | `StartExecutionMain` | Custom DAT, PSO, custom ERG checks, valve + `checkFinalTurbine`. Also reached from `MainExecutedClass` when retry limits run out (see `Main_Executed.cs` private switch). |
 | **Additional load points** | `CustomLoadPointHandler.cxLP_mainKreisl(customerLPList)` | `src/AdditionalLoadPoints.cs` | `ExtraLoadPoints` | Kreisl DAT merge loop, Turba run, then per-LP unknown-dimension fills and final Kreisl + power check. |
 
-### 11.2 Dispatch diagram (conceptual — who calls whom)
+### 11.2 Who calls whom (overview diagram)
 
 ```mermaid
 flowchart LR
@@ -2921,8 +2973,8 @@ flowchart LR
   KR --> REF
   REF --> PF
   PF -->|standard feasible| REF
-  PF -->|executed branch e.g. BCD1190| ME
-  ME -->|budget exhausted → custom handoff| CU
+  PF -->|executed branch| ME
+  ME -->|BCD1190 retry limit reached| CU
   CU --> LP
   SP --> LP
   ME --> LP
@@ -2932,50 +2984,50 @@ Solid arrows are representative; actual wiring depends on the active page and LP
 
 ### 11.3 Supporting singletons / config loaded at startup
 
-- **`StartExec.InitConfig`** (`src/Program.cs`): fills nozzle, power-efficiency, pre-feasibility, load-point and Turba output models from Excel/backend data before `FillInputValues` updates Kreisl DAT fields.
+- **`StartExec.InitConfig`** (`src/Program.cs`): fills nozzle, power-efficiency, early checks, load-point and Turba output models from Excel/backend data before `FillInputValues` updates Kreisl DAT fields.
 - **DI registration** (`StartExec.CreateHostBuilder`): `IThermodynamicLibrary`, `ILogger`, `IERGHandlerService` shared by Kreisl and standard paths.
 
 ### 11.4 How to extend this documentation
 
 Later **method-by-method** chapters can cite: **caller → callee → condition → flowchart subsection**. The gallery links **Standard → Sections 5–6**, **Executed → Section 7**, **Custom → Section 8**, **Additional LP → Section 9**.
 
-### 11.5 End-to-end code walkthrough (by path)
+### 11.5 End-to-end code step-by-step guide (by path)
 
-This section is the “**how the code actually runs**” narrative: **entry point → major calls → handoffs**. It is intentionally shorter than Sections 5–9 (which are diagram-heavy and method-deep).
+This section is the “**how the code actually runs**” narrative: **entry point → major calls → path switches**. It is intentionally shorter than Sections 5–9 (which are diagram-heavy and method-deep).
 
 #### 11.5.1 Standard flow (two entry points)
 
 There are two common “standard” entry shapes:
 
-- **UI-style pipeline**: `StartExec.Main4(args)` in `src/Program.cs`
-- **Kreisl-first orchestration**: `StartKreisl.MainKreisL(args)` in `src/kreisl.cs`
+- **Standard from UI (`Main4`)**: `StartExec.Main4(args)` in `src/Program.cs`
+- **Standard flow (Kreisl entry)**: `StartKreisl.MainKreisL(args)` in `src/kreisl.cs`
 
-Both do the same *big idea*: **select template → run Kreisl/Turba → validate ERG → optimize valve → close power**. Details are in **Section 5 (flowchart)** and **Section 6 (theory)**.
+Both share the same *big idea*: **pick a template → run Turba (and often Kreisl) → check ERG → optimize valve → match power**. Section 5–6 describe the **Kreisl entry** path in full.
 
-Call-tree sketch:
+**`StartExec.Main4`** (`src/Program.cs`) — shorter UI path:
 
-- `StartExec.Main4`
-  - host + config
-  - `StartKreisl.DeleteCONFiles`
-  - `KreislDATHandler.RefreshKreislDAT` (template family selection)
-  - `InitConfig`
-  - `HBDPowerCalculator` defaults + init
-  - `DatFileSelector.ReferenceDATSelector`
-  - `LoadPointGen.GenerateLoadPoints`
-  - `DATFileProcessor.PrepareDATFile`
-  - `TurbaConfig.LaunchTurba`
-  - `ERGVerification.ErgResultsCheck`
-  - `ValvePointOptimizer.ValvePointOptimize`
-  - `PowerMatch.CheckPower`
+- host + `InitConfig` + `RefreshKreislDAT`
+- `ReferenceDATSelector` → `GenerateLoadPoints` → `PrepareDATFile`
+- `LaunchTurba` → **one** `ErgResultsCheck` → `ValvePointOptimize` → `CheckPower`
+- Does **not** call `LaunchKreisL`, `UpdateLP5`, `FillVari40`, or the second Turba/CON rename block.
+
+**`StartKreisl.MainKreisL`** (`src/kreisl.cs`) — full path (Section 5 diagram):
+
+- cleanup + `RefreshKreislDAT` + `LaunchKreisL` (twice, with refresh between)
+- same DAT/Turba core as above, plus **`UpdateLP5`** and **two** ERG passes
+- after valve: `FillVari40` → Turba again → rename `TURBA.CON` → wheel chamber pressure → `CheckPower`
 
 ```mermaid
 flowchart TD
-  A["StartExec.Main4 / StartKreisl.MainKreisL"] --> B["RefreshKreislDAT (template selection)"]
-  B --> C["ReferenceDATSelector + GenerateLoadPoints + PrepareDATFile"]
-  C --> D["LaunchTurba + ERG checks"]
-  D --> E["ValvePointOptimize"]
-  E --> F["FillVari40 + rename CON + wheel pressure"]
-  F --> G["PowerMatch.CheckPower"]
+  subgraph M4["Main4 (UI entry)"]
+    A1["RefreshKreislDAT"] --> A2["ReferenceDATSelector → LPs → PrepareDAT"]
+    A2 --> A3["Turba → ERG → valve → CheckPower"]
+  end
+  subgraph MK["MainKreisL (Kreisl entry)"]
+    B1["RefreshKreislDAT → LaunchKreisL"] --> B2["ReferenceDATSelector → LPs → PrepareDAT"]
+    B2 --> B3["Turba → ERG → UpdateLP5 → ERG → valve"]
+    B3 --> B4["FillVari40 → Turba → rename CON → wheel P → CheckPower"]
+  end
 ```
 
 #### 11.5.2 Executed flow (criteria controller)
@@ -2990,16 +3042,16 @@ Executed flow is controlled by `MainExecutedClass` (`src/Main_Executed.cs`):
 
 High-level shape (details are in **Section 7**):
 
-- retry/fallback gates (budgets)
+- retry and fallback rules (budgets)
 - nearest executed project selection + executed reference DAT copy
 - executed LP generation + executed DAT rebuild
 - Turba run + ERG check pass 1
 - `UpdateLP5` + ERG check pass 2
-- valve optimization + stabilization
+- valve optimization + final sync steps
 - `CheckPower(maxLp)`
-- fallback handoffs:
-  - `BCD1120` budget exhausted → rerun as `BCD1190`
-  - `BCD1190` budget exhausted → `CustomExecutedClass.Main_CustomFlowPathTest(maxLp)`
+- fallback switches:
+  - `BCD1120` retry limit reached → rerun as `BCD1190`
+  - `BCD1190` retry limit reached → `CustomExecutedClass.Main_CustomFlowPathTest(maxLp)`
 
 ```mermaid
 flowchart TD
@@ -3008,9 +3060,9 @@ flowchart TD
   C --> D["Turba + ERG check (pass 1)"]
   D --> E["UpdateLP5"]
   E --> F["Turba + ERG check (pass 2)"]
-  F --> G["Valve + stabilization"]
+  F --> G["Valve + final sync steps"]
   G --> H["CheckPower(maxLp)"]
-  H --> I{"Budgets exhausted?"}
+  H --> I{"Retry limits reached?"}
   I -->|BCD1120| BCD1190["Switch to BCD1190"]
   I -->|BCD1190| CU["Custom flow"]
 ```
@@ -3023,7 +3075,7 @@ High-level shape (details are in **Section 8**):
 
 - cleanup + `RefreshKreislDAT`
 - generate custom LPs
-- pre-feasibility decisions
+- early checks decisions
 - nearest custom params + custom reference DAT copy
 - custom DAT rebuild (`PrepareDatFile`)
 - BCD rewrite (`BCD_UPDATE`)
@@ -3048,20 +3100,20 @@ Additional-load-points entry is `CustomLoadPointHandler.cxLP_mainKreisl(customer
 High-level shape (details are in **Section 9**):
 
 - **Phase 1**: write customer LP1 into `KREISL.DAT`, back-fill zeros from `KREISL.ERG`, sort by volumetric flow
-- **Phase 2**: run a **standard-mirror Turba stabilization** block (`ReferenceDATSelector → Turba → ERG → LP5 → valve`)
+- **Phase 2**: run a **standard-mirror Turba final sync steps** block (`ReferenceDATSelector → Turba → ERG → LP5 → valve`)
 - **Phase 3**: loop each extra customer LP and append/repair the Kreisl DAT text using `fillAGainDat` / `fillLPAgain(Pr/T/M/P/E)`
 - finalize: optional desuperheater update from Turba ERG, `LaunchKreisl`, then `CheckPower(...)`
 
 ```mermaid
 flowchart TD
   A["cxLP_mainKreisl(customerLPList)"] --> B["Phase 1: Kreisl LP prep + ERG backfill + sort"]
-  B --> C["Phase 2: Standard-mirror Turba stabilization"]
+  B --> C["Phase 2: Standard-mirror Turba final sync steps"]
   C --> D["Phase 3: Merge extra customer LPs into KREISL.DAT"]
   D --> E["UpdateDesupratorWithTurba (if needed)"]
   E --> F["LaunchKreisl + CheckPower"]
 ```
 
-### 11.6 Code documentation (deeper): function-by-function walkthroughs
+### 11.6 Method-by-method notes (more detail)
 
 This is the “**read the code in the same order it executes**” documentation. For each path, you get:
 
@@ -3070,7 +3122,7 @@ This is the “**read the code in the same order it executes**” documentation.
 - **what it reads/writes (important files)**
 - **what it calls next**
 
-#### 11.6.1 Standard path (UI-style) — `StartExec.Main4(args)` in `src/Program.cs`
+#### 11.6.1 Standard path (`Main4`) — `StartExec.Main4(args)` in `src/Program.cs`
 
 Execution order (simplified but accurate to code):
 
@@ -3091,7 +3143,7 @@ Execution order (simplified but accurate to code):
 7. **`HBDPowerCalculator.HBDSetDefaultCustomerParams()`**
    - **does**: seeds HMBD defaults for this run (customer parameters)
 8. **`DatFileSelector.ReferenceDATSelector()`**
-   - **does**: chooses the reference Turba DAT flowpath based on **pre-feasibility** decisions and copies it into working area
+   - **does**: chooses the reference Turba DAT flowpath based on **early checks** decisions and copies it into working area
    - **details**: see **Section 7.6** (executed selector) and **Section 6.0/6.4** (standard spine)
 9. **`LoadPointGen.GenerateLoadPoints()`**
    - **does**: generates internal load points used by Turba DAT writing
@@ -3102,7 +3154,7 @@ Execution order (simplified but accurate to code):
 12. **`ERGVerification.ErgResultsCheck()`**
    - **does**: validates the Turba ERG outputs against engineering constraints (criterion checks, limits, etc.)
 13. **`ValvePointOptimizer.ValvePointOptimize()`**
-   - **does**: iteratively adjusts valve/nozzle group conditions to reduce deviation and improve convergence
+   - **does**: in a loop adjusts valve/nozzle group conditions to reduce deviation and get a stable valve match
 14. **`PowerMatch.CheckPower()`**
    - **does**: final closure; includes no-load checks, bending/thrust checks, and repair loops (LP5 logic)
    - **deep dive**: see **Section 7.10.1** (`CorrectLP5Bending` and DAT patchers)
@@ -3213,7 +3265,7 @@ At a high level this method does:
 
 **K) `ERGVerification.ErgResultsCheck()`**
 
-Runs a gate chain (stops early on first fail):
+Runs a check sequence (stops early on first fail):
 
 - `ErgCheckExhaustVolumetricFlow(maxlPS)`
 - `ErgCheck_NozzlesSection(maxlPS)`
@@ -3229,7 +3281,7 @@ Runs a gate chain (stops early on first fail):
 
 **Where the LP5 “regen + re-check” happens (Standard)**:
 
-- In the standard pipelines, this gate chain is run in **two passes**:
+- In the standard flows, this check sequence is run in **two passes**:
   - **Pass 1**: run Turba → run `ERGVerification.ErgResultsCheck()` on the initial load-point set.
   - **Update LP5**: `UpdateLP5()` rewrites LP5 (stress/bending/thrust-oriented point) from the latest turbine state.
   - **Pass 2**: re-run Turba → re-run `ERGVerification.ErgResultsCheck()` again so the same gates (especially bending/thrust-related checks) validate the **new LP5** as well.
@@ -3239,7 +3291,7 @@ Runs a gate chain (stops early on first fail):
 - reads `TurbaOutputModel` deviation and nozzle-group valve status
 - calls one of:
   - `AdjustNozzlePair(...)` → `NozzleOptimizer.UpdateNozzleSpecs(...)` → `TurbaConfig.LaunchTurba()` → re-run `ValvePointOptimize`
-  - `AdjustValvePointMassFlow(...)` → `PrepareDATFile_OnlyLPUpdate(...)` → `TurbaConfig.LaunchTurba()` loop until convergence
+  - `AdjustValvePointMassFlow(...)` → `PrepareDATFile_OnlyLPUpdate(...)` → `TurbaConfig.LaunchTurba()` loop until the match is good enough
 
 **M) `PowerMatch.CheckPower(maxLP)`**
 
@@ -3273,12 +3325,12 @@ This is why Section 6.3 calls it **select → run → resync**.
 
 Execution order inside **`MainExecuted`**:
 
-1. **Call counters / budgets**
+1. **Call counters (retry limits)**
    - `mainCallCounters` for `BCD1120` / `BCD1190` — cap = **`turbineDataModel.NoOfExecuted`** (neighbor count budget)
    - `throttleCounters` for **`Throttle`** — hard cap **`MAX_THROTTLE_CALLS`** (currently `2`); when exceeded the method **`return`**s *(the console prints “custom path” but **`Main_CustomFlowPathTest` is not invoked from this branch)*.
-   - **Handoffs**
-     - `BCD1120` budget exhausted → **`ResetCleanUpExecutedNearest()`** → **`MainExecuted("BCD1190", maxLp)`** (fresh attempt with broader neighbor pool rules on the BCD1190 path).
-     - `BCD1190` budget exhausted → **`Main_CustomFlowPathTest(maxLp)`** (custom executed flow).
+   - **Path switches**
+     - `BCD1120` retry limit reached → **`ResetCleanUpExecutedNearest()`** → **`MainExecuted("BCD1190", maxLp)`** (fresh attempt with broader neighbor pool rules on the BCD1190 path).
+     - `BCD1190` retry limit reached → **`Main_CustomFlowPathTest(maxLp)`** (custom executed flow).
      - Successful counter increment also **`ResetNozzleCounter()`** and clears **`OldNa` / `OldNb`** on **`TurbineDataModel`**.
 2. **Executed HMBD defaults**
    - **`ExecHMBDConfiguration`**: **`HBDsetDefaultCustomerParamas_Executed_Kreisl()`** if **`StartKreisl.kreislKey`**, else **`HBDsetDefaultCustomerParamas_Executed()`**
@@ -3292,7 +3344,7 @@ Execution order inside **`MainExecuted`**:
    - **`HBDupdateEfficiency`** copies **`ListPower[0].Efficiency`** into **`turbineDataModel.TurbineEfficiency`**.
    - **`PrepareDATFileExecuted(maxLp)`**
 6. **Wheel chamber guard**
-   - **`IsWheelChamberPressureValid()`** compares **`RADKAMMER`** from in-memory **`DAT_DATA`**, **`PreFeasibilityDataModel`** inlet/back-pressure against engineering limits; **if false**, logs and **recursively calls `MainExecuted(criteria, maxLp)`** so **`MoveYAndSetParams`** can advance to another neighbor (**`FlowPathSelector.AddOrMoveY`** side effects).
+   - **`IsWheelChamberPressureValid()`** compares **`RADKAMMER`** from in-memory **`DAT_DATA`**, **`PreFeasibilityDataModel`** inlet/back-pressure against engineering limits; **if false**, logs and **calls `MainExecuted(criteria, maxLp)` again** so **`MoveYAndSetParams`** can advance to another neighbor (**`FlowPathSelector.AddOrMoveY`** side effects).
 7. **Turba + ERG pass 1**
    - **`LaunchTurba(maxLp)`** — **`TurbaAutomation.LaunchTurba`** in `src/core/Turba/Exec_TurbaConfig.cs` (moves **`KREISL.CON`** → **`KREISLTURBAE1.DAT.CON`** when present, runs batch, loads ERG into **`TurbaOutputModel`**).
    - **`ErgResultsCheckExecuted(criteria, false, maxLp)`** — **`isLP5Update` / `isCheckingLP5` = false**: first-pass checks without “LP5 already refreshed” semantics.
@@ -3315,7 +3367,7 @@ Same idea as **Section 11.6.1.1**, but for the executed stack and files.
 **A) `PowerKNN.ExecutePowerKNN(criteria)`** (`src/core/HMBD/Exec_Power_KNN.cs`)
 
 - Reads **`AppSettings:ExcelFilePath`** workbook sheets **`PowerDB`**, **`PowerNormDB`**, **`PowerNearest`**.
-- Normalizes the current case (pressure, temperature, mass, exhaust pressure).
+- Sets standard values for the current case (pressure, temperature, mass, exhaust pressure).
 - Filters historical rows by **`criteria`**:
   - **`BCD1120`**: normalized column 8 in band **1120–1130**
   - **`BCD1190`**: band **1190–1210**
@@ -3349,18 +3401,18 @@ Same idea as **Section 11.6.1.1**, but for the executed stack and files.
 
 **F) `ErgResultsCheckExecuted(criteria, isLP5Update, maxLp)`**
 
-- **Called twice in the executed pipeline** (see Section 11.6.3 execution order):
+- **Called twice in the executed flow** (see Section 11.6.3 execution order):
   - **Pass 1**: after the first `LaunchTurba(maxLp)`, call `ErgResultsCheckExecuted(criteria, false, maxLp)`.
   - **Update LP5**: `MainExecutedClass.UpdateLP5()` rewrites LP5 (index 5) to a regenerated “stress” point.
   - **Pass 2**: call `ErgResultsCheckExecuted(criteria, true, maxLp)` to re-validate ERG gates after LP5 changed.
 
 - Sets the appropriate static flag then dispatches:
   - **`BCD1120`** → **`ERG_BCD1120.isCheckingLP5 = isLP5Update`** → **`ErgResultsCheckBCD1120(maxLp)`**
-    - Gate chain (order in code): exhaust volumetric → **nozzles (`ExecutedNozzleOptimizer.RuleEngineAlgorithmForNozzles`)** → thrust → delta-T / GBC / wheel / bending → **`ErgResultsCheckBCD1120New`**
+    - Check order in code: exhaust volumetric → **nozzles (`ExecutedNozzleOptimizer.RuleEngineAlgorithmForNozzles`)** → thrust → delta-T / GBC / wheel / bending → **`ErgResultsCheckBCD1120New`**
     - Failure paths often recurse **`MainExecuted("BCD1190", maxLp)`** or **`ResetCleanUpExecutedNearest()`** then hand off.
   - **`BCD1190`** → **`ERG_BCD1190.isLP5Update = isLP5Update`** → **`ErgResultsCheckBCD1190(maxLp)`**
-    - Gate chain: **`ErgCheckExhaust1190`** (exhaust curves / delta-T bands) → nozzles → thrust → delta-T / GBC / wheel / bending → **`ErgResultsCheckBCD1190New`**
-    - Failed exhaust / neighbor exhaustion paths call **`MainExecuted("BCD1190", maxLp)`** again.
+    - Check order: **`ErgCheckExhaust1190`** (exhaust curves / delta-T bands) → nozzles → thrust → delta-T / GBC / wheel / bending → **`ErgResultsCheckBCD1190New`**
+    - Failed exhaust / too many neighbor tries paths call **`MainExecuted("BCD1190", maxLp)`** again.
   - **`Throttle`** → **`ERGResultsChecker.ERGResultsCheckThrottle()`** (throttle-specific ERG gate file).
 
 **G) `MainExecutedClass.UpdateLP5()`** (static)
@@ -3372,7 +3424,7 @@ Same idea as **Section 11.6.1.1**, but for the executed stack and files.
 - Reads **`TurbaOutputModel`** LP1 and LP6 **`ABWEICHUNG`** and LP6 nozzle group state.
 - If already within **0–0.5%**, returns.
 - Otherwise **`AdjustNozzlePair`** → **`ExecutedNozzleOptimizer.UpdateNozzleSpecs`** → **`TurbaAutomation.LaunchTurba`** → recursive **`ValvePointOptimize`**, or **`AdjustValvePointMassFlow`** loop:
-  - **`PrepareDatFileOnlyLPUpdate`** → **`TurbaAutomation.LaunchTurba`** until deviation sign / step-size convergence.
+  - **`PrepareDatFileOnlyLPUpdate`** → **`TurbaAutomation.LaunchTurba`** until deviation sign / the step size settles.
 
 **I) Post-valve: `FillVari40` → Turba → (optional multi-custom-LP Kreisl) → CON rename → wheel pressure → `ExecPowerMatch.CheckPower`**
 
@@ -3388,7 +3440,7 @@ Execution order (the major blocks you should follow in code):
    - `FillClosestTurbineEfficiency()`, `GetTurbaCON(ClosestProjectID)`, `FillInputValues()`
 2. **Generate custom load points**
    - `CustomLoadPointGenerator.GenerateLoadPoints(mxlp)`
-3. **Pre-feasibility decision**
+3. **Early checks decision**
    - `preFeasibilityDataModel.fillPrefeasibilityDecisionChecks()`
 4. **Seed nearest custom parameters + prepare custom reference DAT**
    - `CustomDatFileHandler.GetNearestParams_Custom()`
@@ -3410,7 +3462,7 @@ Execution order (the major blocks you should follow in code):
 
 ##### 11.6.4.1 Deeper: what each Custom step calls (mini call trees)
 
-Below is the same “mini call tree” style as **Section 11.6.1.1** (standard) and **Section 11.6.3.1** (executed), but for the **custom** pipeline.
+Below is the same “mini call tree” style as **Section 11.6.1.1** (standard) and **Section 11.6.3.1** (executed), but for the **custom** flow.
 
 **A) Setup and Kreisl bootstrap** (`src/Main_Custom.cs`)
 
@@ -3509,7 +3561,7 @@ This one is easiest to follow in the same three phases used in **Section 9.1.1**
    - back-fill missing values from `KREISL.ERG` and compute `VolFlow`
    - `SortCustomerLoadPointsByVol()`
    - closed-cycle extras: add capacity LP, PST default, bump `cxLP_RngStop`
-2. **Standard-mirror Turba stabilization**
+2. **Standard-mirror Turba final sync steps**
    - `ReferenceDATSelector(cxLP_RngStop + 10)`
    - `cxLP_GenerateLoadPoints("Recal")` + `GenerateLoadPoints()`
    - `prepareDATFile(cxLP_RngStop + 10)`
@@ -3527,11 +3579,14 @@ This one is easiest to follow in the same three phases used in **Section 9.1.1**
 
 ---
 
+<a id="12-notes"></a>
+
 ## 12) Notes
 
-- If diagrams show as a `mermaid` **code block** instead of a picture, your editor preview is not rendering Mermaid (re-enable a **Markdown Mermaid** extension, or view this file on GitHub). A recent Cursor/VS Code or extension update can turn that off.
-- **PDF export (Mermaid renders as diagrams):** from folder `my-project/docs`, run `npm install` then `npm run pdf`. This writes `README.pdf` next to this file (loads Mermaid 11 from a CDN, then prints via headless Chromium). First run downloads Puppeteer’s browser; Internet access is required. Diagram scale is capped in `docs/scripts/render-readme-pdf.mjs` (`max-height` on SVG and compact `flowchart` spacing); increase those values if diagrams look too small.
-- This README is code-logic first and intentionally flow-oriented.
-- Keep terminology as in code where possible (`DumpCondensor`, `DeaeratorOutletTemp`, `IsPRVTemplate`) to avoid mismatch.
-- Extend each section with diagrams and method-level call mapping as documentation evolves.
+- If flowcharts show as **plain text** instead of pictures, turn on diagram preview in your editor, or open this file on **GitHub** (diagrams render there by default).
+- **PDF export:** from folder `my-project/docs`, run `npm install` then `npm run pdf`. This creates `README.pdf` next to this file (flowcharts are drawn during export). The first run downloads a headless browser; you need Internet access. To change diagram size, edit `docs/scripts/render-readme-pdf.mjs`.
+- This README focuses on **how the code flows**, not on API reference.
+- Names match the code where it matters (`DumpCondensor`, `DeaeratorOutletTemp`, `IsPRVTemplate`) so you can search the repo easily.
+- New sections and method-level notes can be added over time.
 
+  
